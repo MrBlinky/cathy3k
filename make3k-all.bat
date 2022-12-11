@@ -87,6 +87,9 @@ call :make arduboy3k-bootloader-game-promicro-st7565-sda "-DARDUBOY -DCART_CS_SD
 call :make arduBigBOY-bootloader-menu "-DARDUBOY -DARDUBIGBOY -DDEVICE_VID=0x2341 -DDEVICE_PID=0x0036"
 call :make arduBigBOY-bootloader-game "-DARDUBOY -DARDUBIGBOY -DRUN_APP_ON_POWERON -DDEVICE_VID=0x2341 -DDEVICE_PID=0x0036"
 
+call :make microcade-bootloader-menu "-DARDUBOY -DARDUBOY_PROMICRO -DMICROCADE -DDEVICE_VID=0x2341 -DDEVICE_PID=0x0036"
+call :make microcade-bootloader-game "-DARDUBOY -DARDUBOY_PROMICRO -DMICROCADE -DRUN_APP_ON_POWERON -DDEVICE_VID=0x2341 -DDEVICE_PID=0x0036"
+
 @pause
 @exit
 

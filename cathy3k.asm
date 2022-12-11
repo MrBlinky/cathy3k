@@ -5,7 +5,7 @@
 ;  An optimized reversed Caterina bootloader with added Arduboy features in 3K
 ;
 ;                   Assembly optimalisation and Arduboy features
-;                         by Mr.Blinky Oct.2017 - Sep.2020
+;                         by Mr.Blinky Oct.2017 - dec.2022
 ;
 ;             m s t r <d0t> b l i n k y <at> g m a i l <d0t> c o m
 ;
@@ -799,7 +799,7 @@ ManufacturerString:         ;-header-
 ;   r1      zero reg
 ;   r2      frame counter
 ;   r3      bootloader timeout counter
-;   r4, r5  Current Adrress
+;   r4, r5  Current Address
 ;   r6, r7  Current application page
 ;   r8      Current list
 ;   r9      buttons state
@@ -1023,9 +1023,11 @@ reset_b0:
                             out     PORTF, r24
                         #else
                           #if DEVICE_PID == 0x0037
-                            ldi     r24, 0xF0               ;RGBLED OFF | PULLUP B-Button | RXLED OFF
-                          #else 
-                            ldi     r24, 0xF1               ;RGBLED OFF | PULLUP B-Button | RXLED OFF (Arduino micro)
+                            ldi     r24, 0xF0               ;RGBLED OFF | PULLUP B-Button | RXLED OFF (Arduino micro)
+                          #elif defined (MICROCADE)
+                            ldi     r24, 0x91               ;RGBLED BLUE+RED ON | PULLUP B-Button | RXLED OFF 
+                          #else
+                            ldi     r24, 0xF1               ;RGBLED OFF | PULLUP B-Button | RXLED OFF 
                           #endif    
                             out     PORTB, r24  
                             ldi     r24, 0xE7               ;RGBLED, SPI_CLK, MOSI, RXLED as outputs
@@ -1053,7 +1055,11 @@ reset_b0:
                             ldi     r24, (1 << OLED_DC) | (1 << TX_LED) | (1 << RGB_G) | (1 << CART_CS) ; as outputs
                             out     DDRD, r24
                           #else  
+                           #if defined (MICROCADE)
+                            ldi     r24, (0 << OLED_RST) | (1 << OLED_CS) | (0 << OLED_DC) | (1 << TX_LED) | (0 << RGB_G) | (1 << CART_CS) ;RST active low, CS inactive high, Command mode, Tx LED off, RGB green on, Flash cart inactive high
+                           #else
                             ldi     r24, (0 << OLED_RST) | (1 << OLED_CS) | (0 << OLED_DC) | (1 << TX_LED) | (1 << RGB_G) | (1 << CART_CS) ;RST active low, CS inactive high, Command mode, Tx LED off, RGB green off, Flash cart inactive high
+                           #endif
                             out     PORTD, r24
                             ldi     r24, (1 << OLED_RST) | (1 << OLED_CS) | (1 << OLED_DC) | (1 << TX_LED) | (1 << RGB_G) | (1 << CART_CS) ; as outputs
                             out     DDRD, r24
@@ -1096,8 +1102,8 @@ reset_b1:
                             
                             ;clear .bss section and remaining ram
 reset_b2:
-                            ;ld      r24, X                      ;after loop r24 = RAMEND = power down flag
-                            st      X+, r1                      ;set to zero
+                            ;ld      r24, X                      ;after the loop, r24 contains last byte of RAM which is the power down flag
+                            st      X+, r1                      ;set RAM to zero
                             cpi     r27, hi8(RAMEND+1)
                             brne    reset_b2
 
@@ -1213,7 +1219,7 @@ bootloader_loop:
                             
                           ;#ifndef ARDUBOY_DEVKIT              //;DevKit doesn't have a reset button
                           ;  ldi     r24, 0xAB ;POWER_DOWN_FLAG
-                          ;  eor     r24, r8
+                          ;  eor     r24, r8                    ;xor list so only a reset on loader screen powers down
                           ;  sts     (RAMEND), r24
                           ;#endif
                           
@@ -1242,9 +1248,11 @@ StartSketch:
                             ldi     r24, 1 << IVCE      ;enable interrupt vector change
                             out     MCUCR, r24
                             out     MCUCR, r1           ;relocate vector table to application section
+                           #ifndef MICROCADE
                             RGB_RED_OFF
                             RGB_GREEN_OFF
                             RGB_BLUE_OFF
+                           #endif
                             TX_LED_OFF
                             RX_LED_OFF
                             jmp     0                   ; start application
@@ -1439,6 +1447,13 @@ CDC_Task_Command_x:         ;-----------------------------------set LEDs
                             TX_LED_OFF
                             sbrc    r24,LED_CTRL_TX_ON
                             TX_LED_ON
+                           #if defined (MICROCADE)
+                            sbrc    r24, LED_CTRL_NOBUTTONS     ;move this test here since this bit is cleared by and below
+                            clr     r8
+                            andi    r24, 0x07                   ;test RGB LED off
+                            brne    .+4
+                            ori     r24, 0x07                   ;if so change to white 
+                           #endif
                             RGB_RED_OFF
                             sbrc    r24,LED_CTRL_RGB_R_ON
                             RGB_RED_ON
@@ -1448,8 +1463,10 @@ CDC_Task_Command_x:         ;-----------------------------------set LEDs
                             RGB_BLUE_OFF
                             sbrc    r24,LED_CTRL_RGB_B_ON
                             RGB_BLUE_ON
+                           #if !defined (MICROCADE)
                             sbrc    r24, LED_CTRL_NOBUTTONS
                             clr     r8                          ;reset menu to bootloader list
+                           #endif
                             rjmp    CDC_Task_Acknowledge
 CDC_Task_Command_j:
                             cpi     r24, 'j'
@@ -2549,7 +2566,11 @@ SetupHardware_bootloader:
                             ldi     r24,  (1 << TX_LED) | (1 << RGB_G) ;Command mode, Tx LED off, RGB green off, Flash cart active
                             out     PORTD, r24
                           #else   
+                           #if defined (MICROCADE)
+                            ldi     r24, (1 << OLED_RST) | (1 << TX_LED) | (0 << RGB_G)  | (1 << OLED_CS) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, RGB green on, Flash cart active
+                           #else
                             ldi     r24, (1 << OLED_RST) | (1 << TX_LED) | (1 << RGB_G)  | (1 << OLED_CS) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, RGB green off, Flash cart active
+                           #endif
                             out     PORTD, r24
                           #endif   
                         #elif defined (ARDUBIGBOY)
@@ -2797,7 +2818,7 @@ SelectGame:
 
 ;Note: select game may only be called after SelectList or successful LoadApplicationInfo
 
-                           #ifdef   LCD_ST7565
+                           #if defined (LCD_ST7565) || (MICROCADE)
                             RGB_RED_ON                      ;force white backlight for LCD display
                             RGB_GREEN_ON
                             RGB_BLUE_ON
