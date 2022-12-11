@@ -1451,7 +1451,7 @@ CDC_Task_Command_x:         ;-----------------------------------set LEDs
                             sbrc    r24, LED_CTRL_NOBUTTONS     ;move this test here since this bit is cleared by and below
                             clr     r8
                             andi    r24, 0x07                   ;test RGB LED off
-                            brne    .+4
+                            brne    .+2
                             ori     r24, 0x07                   ;if so change to white 
                            #endif
                             RGB_RED_OFF
