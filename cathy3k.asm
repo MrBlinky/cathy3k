@@ -509,6 +509,27 @@
  #define B_BUTTON          0
  #define AB_BUTTON         0 
 #else
+#if defined (MICROCADE)
+ #define BTN_UP_BIT        4
+ #define BTN_UP_PIN        PINF
+ #define BTN_UP_DDR        DDRF
+ #define BTN_UP_PORT       PORTF
+
+ #define BTN_RIGHT_BIT     5
+ #define BTN_RIGHT_PIN     PINF
+ #define BTN_RIGHT_DDR     DDRF
+ #define BTN_RIGHT_PORT    PORTF
+
+ #define BTN_LEFT_BIT      6
+ #define BTN_LEFT_PIN      PINF
+ #define BTN_LEFT_DDR      DDRF
+ #define BTN_LEFT_PORT     PORTF
+
+ #define BTN_DOWN_BIT      7
+ #define BTN_DOWN_PIN      PINF
+ #define BTN_DOWN_DDR      DDRF
+ #define BTN_DOWN_PORT     PORTF
+#else
  #define BTN_UP_BIT        7
  #define BTN_UP_PIN        PINF
  #define BTN_UP_DDR        DDRF
@@ -528,7 +549,7 @@
  #define BTN_DOWN_PIN      PINF
  #define BTN_DOWN_DDR      DDRF
  #define BTN_DOWN_PORT     PORTF
-
+#endif
  #define BTN_A_BIT         6
  #define BTN_A_PIN         PINE
  #define BTN_A_DDR         DDRE
@@ -538,11 +559,17 @@
  #define BTN_B_PIN         PINB
  #define BTN_B_DDR         DDRB
  #define BTN_B_PORT        PORTB
-
+#if defined (MICROCADE)
+ #define LEFT_BUTTON       6
+ #define RIGHT_BUTTON      5
+ #define UP_BUTTON         4
+ #define DOWN_BUTTON       7
+#else
  #define LEFT_BUTTON       5
  #define RIGHT_BUTTON      6
  #define UP_BUTTON         7
  #define DOWN_BUTTON       4
+#endif
  #define A_BUTTON          3
  #define B_BUTTON          2
  #define AB_BUTTON         2
@@ -1417,7 +1444,7 @@ CDC_Task_Command_v:         ;-----------------------------------Hardware version
                             sbis    BTN_B_PIN, BTN_B_BIT
                             subi    r24, -1
                             rcall   WriteNextResponseByte
-                          #ifdef ARDUBOY_DEVKIT
+                          #if defined (ARDUBOY_DEVKIT) || (MICROCADE)
                             ldi     r24, 'A'
                             sbis    BTN_UP_PIN, BTN_UP_BIT
                             subi    r24, -8
