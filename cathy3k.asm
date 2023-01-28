@@ -2846,9 +2846,9 @@ SelectGame:
 ;Note: select game may only be called after SelectList or successful LoadApplicationInfo
 
                            #if defined (LCD_ST7565) || (MICROCADE)
-                            RGB_RED_ON                      ;force white backlight for LCD display
-                            RGB_GREEN_ON
-                            RGB_BLUE_ON
+                           ;RGB_RED_ON                      ;force white backlight for LCD display
+                           ;RGB_GREEN_ON
+                           ;RGB_BLUE_ON
                            #endif
                             ldi     r30, lo8(FlashBuffer)
                             ldi     r31, hi8(FlashBuffer)
