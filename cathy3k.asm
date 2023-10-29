@@ -1,11 +1,11 @@
 ;===============================================================================
 ;                                                             licenced under MIT
-;                              ** Cathy 3K **               
+;                              ** Cathy 3K **
 ;
 ;  An optimized reversed Caterina bootloader with added Arduboy features in 3K
 ;
 ;                   Assembly optimalisation and Arduboy features
-;                         by Mr.Blinky Oct.2017 - dec.2022
+;                         by Mr.Blinky Oct.2017 - Oct.2023
 ;
 ;             m s t r <d0t> b l i n k y <at> g m a i l <d0t> c o m
 ;
@@ -18,22 +18,22 @@
 ;
 ;  - Built in menu to select and burn programs from external serial flash memory
 ;
-;  - 100% compatible with Arduino IDE uploading
+;  - 100% compatible with Arduino IDE / AVRdude uploading
 ;
 ;  - No bootloader time out
 ;
 ;  - Power on + Button Down launces bootloader instead of programmed sketch
 ;
 ;  - A USB icon is displayed in bootloader mode when no serial flash is
-;    available or has not been initialized yet.
+;    available or has not been initialized yet (Not displayed when a RTC is used).
 ;
-;  - Identifies itself as serial programmer 'ARDUBOY' with software version 1.9
+;  - Identifies itself as serial programmer 'ARDUBOY' with software version 2.1
 ;
-;  - Added command to write to OLED display 
+;  - Added command to write to OLED display  (ignored when a RTC is used)
 ;
-;  - Added command to read button states
+;  - Added command to read button states (Not available when a RTC is used)
 ;
-;  - Added command to control LEDs and button input
+;  - Added command to control LEDs and button input (Not available when a RTC is used)
 ;
 ;  - Added command to read and write to serial flash memory
 ;
@@ -43,6 +43,12 @@
 ;
 ;  - closing com port @ 1200 baud while in bootloader mode will restart bootloader
 ;    (speeds up Arduino IDE uploading while in bootloader mode)
+;
+;  - add optional powerdown support
+;
+;  - add Arduboy mini support
+;
+;  - add DS3231 RTC support
 ;
 ;  the following obselete commands where removed:
 ;
@@ -54,12 +60,26 @@
 ;    done using the read block command. A single word can be read as a 2 byte
 ;    block if required.
 ;
-;  - Write single EEPROM byte. Command not used. write EEPROM block command is
-;    used instead. A single EEPROM byte can be written as a one byte block.
+;  - 'D' Write single EEPROM byte. Command not used. write EEPROM block command
+;    is used instead. A single EEPROM byte can be written as a one byte block.
 ;
-;  - Read single EEPROM byte. Command not used. read EEPROM block command is
+;  - 'd' Read single EEPROM byte. Command not used. read EEPROM block command is
 ;    used instead. A single EEPROM byte can be read as a ne byte block.
 ;
+;  - 'e' Erase Chip. Not needed (and not used) to upload program. This command
+;    only erased the program and not the full chip. That can only be done by
+;    a ISP programmer.
+;
+;  the following non mandatory commands are removed (AVRdude works fine without them)
+;
+;  - 'p' programmer type.
+;    Issuing this command will respond with a '?' instead of a 'S'
+;
+;  - 'a' auto address increment inquiry.
+;    Issuing this command will respond with a '?' instead of a 'Y'
+;
+;  command 't' Request supported device list now returns a null list of devices.
+
 ;-------------------------------------------------------------------------------
 ;
 ;             LUFA Library
@@ -106,8 +126,8 @@
 ;                           //;RGB backlight and Power LED
 
 ; #define CART_CS_SDA       //;When using PORTD1/SDA for flash chip select
-;                           //;instead of PORTD2/RX 
-                            
+;                           //;instead of PORTD2/RX
+
 ;the DEVICE_VID and DEVICE_PID will determine for which board the build will be
 ;made. (Arduino Leonardo, Arduino Micro, Arduino Esplora, SparkFun ProMicro)
 
@@ -115,13 +135,19 @@
 ; #define DEVICE_VID                0x2341  //; Arduino LLC
 ; #define DEVICE_PID                0x0036  //; Leonardo Bootloader
 
+;I2C Real time clocks
+
+; #define DS3231
+
+; #define RV3028
+
 ;===============================================================================
 ;boot magic
 
 #define BOOT_SIGNATURE          0xDCFB  //;LUFA signature for Arduino IDE to use
-                                          ;RAMEND-1 to store magic boot key
-#define BOOTLOADER_VERSION_MAJOR '1'
-#define BOOTLOADER_VERSION_MINOR '9'
+                                          ;RAMEND-1 to store magic boot key (not applicable for this bootloader)
+#define BOOTLOADER_VERSION_MAJOR '2'
+#define BOOTLOADER_VERSION_MINOR '1'
 
 #define BOOT_START_ADDR         0x7400
 #define BOOT_END_ADDR           0x7FFF
@@ -143,6 +169,24 @@
 #define PROGRESSBAR_STEPS       64
 #define PROGRESSBAR_START       (DisplayBuffer + 3 * WIDTH + 29 + 3)
 #define PROGRESSBAR_END         (DisplayBuffer + 3 * WIDTH + 29 + 3 + PROGRESSBAR_STEPS)
+
+;datetime positioning
+#define DATE_POS                (DisplayBuffer + 2 * WIDTH + 2)
+#define DATE_SEP                7
+#define TIME_POS                (DisplayBuffer + 2 * WIDTH + 87)
+#define TIME_SEP                3
+#define SEC_POS                 (DisplayBuffer + 3 * WIDTH + 118)
+
+;RTC
+#if defined (DS3231)
+ #define SLA_W                  (0x68) << 1 | 0
+ #define SLA_R                  (0x68) << 1 | 1
+ #define SLD_LEN                6
+#elif defined (RV3028)
+ #define SLA_W                  (0xA4)
+ #define SLA_R                  (0xA5)
+ #define SLD_LEN                17
+#endif
 
 ;OLED display commands
 #define OLED_SET_PAGE_ADDR          0xB0
@@ -211,6 +255,11 @@
 #define USBCON  0x00D8
 #define UHWCON  0x00D7
 
+#define TWBR    0x00B8
+#define TWSR    0x00B9
+#define TWDR    0x00BB
+#define TWCR    0x00BC
+
 #define OCR1AH  0x0089
 #define OCR1AL  0x0088
 
@@ -272,6 +321,9 @@
 #define DDRB    0x04
 #define PINB    0x03
 
+#define I2C_SCL 0
+#define I2C_SDA 1
+
 ;-------------------------------------------------------------------------------
 ;bit values
 ;-------------------------------------------------------------------------------
@@ -321,6 +373,13 @@
 #define FRZCLK  5
 #define USBE    7
 
+;TWCR
+#define TWEN    2
+#define TWSTO   4
+#define TWSTA   5
+#define TWEA    6
+#define TWINT   7
+
 ;UHWCON
 #define UVREGE  0
 
@@ -369,7 +428,7 @@
 #define SM1     2
 #define SM0     1
 #define SE      0
- 
+
 ;ACSR
 #define ACD     7
 #define ACBG    6
@@ -409,7 +468,7 @@
 #ifndef CART_CS_SDA
  #define OLED_RST        1
  #define OLED_CS         3
-#endif 
+#endif
  #define OLED_DC         4
  #define RGB_R           6
  #define RGB_G           0
@@ -451,14 +510,14 @@
   #define RGB_G           7
   #define RGB_B           5
   #ifdef LCD_ST7565
-   #define POWER_LED       0   
+   #define POWER_LED       0
    #define RGB_RED_ON      sbi     PORTB, RGB_R
    #define RGB_GREEN_ON    sbi     PORTB, RGB_G
    #define RGB_BLUE_ON     sbi     PORTB, RGB_B
    #define RGB_RED_OFF     cbi     PORTB, RGB_R
    #define RGB_GREEN_OFF   cbi     PORTB, RGB_G
    #define RGB_BLUE_OFF    cbi     PORTB, RGB_B
-  #else  
+  #else
    #define RGB_RED_ON      cbi     PORTB, RGB_R
    #define RGB_GREEN_ON    cbi     PORTB, RGB_G
    #define RGB_BLUE_ON     cbi     PORTB, RGB_B
@@ -507,7 +566,7 @@
  #define DOWN_BUTTON       6
  #define A_BUTTON          1
  #define B_BUTTON          0
- #define AB_BUTTON         0 
+ #define AB_BUTTON         0
 #else
 #if defined (MICROCADE)
  #define BTN_UP_BIT        4
@@ -749,14 +808,14 @@ ConfigurationDescriptor:    ;-config.header -
                             .byte   0x04        ;d0      =
                             ;.header
                             .byte   0x05
-                            .byte   DTYPE_CSInterface 
+                            .byte   DTYPE_CSInterface
                             ;.data
                             .byte   0x06        ;Subtype = 0x06 (control interface)
                             .byte   0x00        ;d0      =
                             .byte   0x01        ;d1      =
                             ;.header
                             .byte   0x07
-                            .byte   DTYPE_Endpoint 
+                            .byte   DTYPE_Endpoint
                             ;.data
                             .byte   0x82        ;EndpointAddress   = ENDPOINT_DIR_IN | CDC_NOTIFICATION_EPNUM
                             .byte   0x03        ;Attributes        = EP_TYPE_INTERRUPT | ENDPOINT_ATTR_NO_SYNC
@@ -764,33 +823,33 @@ ConfigurationDescriptor:    ;-config.header -
                             .byte   0xff        ;PollingIntervalMS = 0xFF
                             ;.header
                             .byte   0x09
-                            .byte   DTYPE_Interface 
+                            .byte   DTYPE_Interface
                             ;.data
-                            .byte   0x01        ;InterfaceNumber   = 1      
+                            .byte   0x01        ;InterfaceNumber   = 1
                             .byte   0x00        ;AlternateSetting  = 0
                             .byte   0x02        ;TotalEndpoints    = 2
                             .byte   0x0a        ;Class             = data
-                            .byte   0x00        ;SubClass          = 
+                            .byte   0x00        ;SubClass          =
                             .byte   0x00        ;Protocol          =
                             .byte   0x00        ;InterfaceStrIndex = NO_DISCRIPTOR
                             ;.header
                             .byte   0x07
-                            .byte   DTYPE_Endpoint 
+                            .byte   DTYPE_Endpoint
                             ;.data
-                            .byte   0x04        ;EndpointAddress   = 
-                            .byte   0x02        ;Attributes        = 
-                            .word   0x0010      ;EndpointSize      = 
-                            .byte   0x01        ;PollingIntervalMS = 
+                            .byte   0x04        ;EndpointAddress   =
+                            .byte   0x02        ;Attributes        =
+                            .word   0x0010      ;EndpointSize      =
+                            .byte   0x01        ;PollingIntervalMS =
                             ;.header
                             .byte   0x07
-                            .byte   DTYPE_Endpoint 
+                            .byte   DTYPE_Endpoint
                             ;.data
-                            .byte   0x83        ;EndpointAddress   = 
-                            .byte   0x02        ;Attributes        = 
-                            .word   0x0010      ;EndpointSize      = 
-                            .byte   0x01        ;PollingIntervalMS = 
+                            .byte   0x83        ;EndpointAddress   =
+                            .byte   0x02        ;Attributes        =
+                            .word   0x0010      ;EndpointSize      =
+                            .byte   0x01        ;PollingIntervalMS =
 
-;UTF-8 strings                            
+;UTF-8 strings
                           #if defined (USE_LANGUAGE_STRING)
 LanguageString:             ;-header-
                             .byte   sizeof_LanguageString   ;USB_Descriptor_Header.Size
@@ -798,7 +857,7 @@ LanguageString:             ;-header-
                             ;-data-
                             .word   LANGUAGE_ID_ENG
                           #endif
-                          
+
                           #ifdef USE_PRODUCT_STRING
 ProductString:              ;-header-
                             .byte   sizeof_ProductString    ;USB_Descriptor_Header.Size = 2 + (16 unicode chars) << 1
@@ -806,7 +865,7 @@ ProductString:              ;-header-
                             ;-data-
                             .word   PRODUCT_STRING
                           #endif
-                          
+
                           #ifdef USE_MANUFACTURE_STRING
 ManufacturerString:         ;-header-
                             .byte   sizeof_ManufacturerString
@@ -830,6 +889,7 @@ ManufacturerString:         ;-header-
 ;   r6, r7  Current application page
 ;   r8      Current list
 ;   r9      buttons state
+;   r10     replacement for GPIOR0
 
 ;-------------------------------------------------------------------------------
 ;7800 Reset Vector (do not change code size)
@@ -842,14 +902,14 @@ VECTOR_00_7800:             clr     r1                  ;global zero reg
                             ldi     r24, 0x18           ;we want watch dog disabled asap
                             sts     WDTCSR, r24
                             sts     WDTCSR, r1
-                            
+
                             ;clear stack
-                            
+
                             ldi     r24, lo8(RAMEND-1)  ;-1 for power down flag
                             ldi     r25, hi8(RAMEND-1)
                             out     SPH, r25            ;SP = RAMEND-1
                             out     SPL, r24
-                            
+
                             ;clear vars stored in registers
 
                             clr     r2                  ;reset frame counter
@@ -859,7 +919,7 @@ VECTOR_00_7800:             clr     r1                  ;global zero reg
                             movw    r8, r2              ;clear list, buttons state
                             ldi     r24, 1 << CLKPCE    ;CLKPR value
                             rjmp    reset_b0
-                            
+
 ;-------------------------------------------------------------------------------
 ;7828 General USB vector (do not change code size)
 ;-------------------------------------------------------------------------------
@@ -894,9 +954,11 @@ TIMER1_COMPA_interrupt:     push    r0
                             sts     TCNT1L, r24
                             ldi     r30, lo8(IndexedVars)
                             ldi     r31, hi8(IndexedVars)
+                           #if !(defined (DS3231) || defined (RV3028))
                             ldd     r25, z+IDX_LEDCONTROL
                             andi    r25, 1 << LED_CTRL_RXTX
                             brne    TIMER1_COMPA_interrupt_b2   ;don't update RxTx LEDs
+                           #endif
                             ldd     r25, z+IDX_TXLEDPULSE
                             cp      r24, r25                    ;sets carry if r25 > 0
                             sbc     r25, r24                    ;r25 -0 - carry
@@ -915,7 +977,7 @@ TIMER1_COMPA_interrupt_b1:
 TIMER1_COMPA_interrupt_b2:
                             inc     r2                      ;frame counter
                             brne    TIMER1_COMPA_int_end    ;no overflow
-                            
+
                             cp      r24, r3                 ;test timeout activated (sets carry)
                             adc     r3, r24                 ;increase timeout if so
 TIMER1_COMPA_int_end:
@@ -930,7 +992,7 @@ USB_general_int_b1:
                             rjmp    USB_general_int_b3
 
                             ;VBUS transition interrupt (connect/disconnect)
-                            
+
                             lds     r24, USBINT
                             andi    r24, ~(1 << VBUSTI)     ;clear VBUSTI interupt
                             sts     USBINT, r24
@@ -939,16 +1001,16 @@ USB_general_int_b1:
                             rjmp    USB_general_int_b2
 
                             ;device connected (voltage on VBUS > 1.4V)
-                            
+
                             rcall   pll_enable
                             ldi     r24, 0x01
-                            out     GPIOR0, r24
+                            mov     r10, r24                ;GPIOR0
                             rjmp    USB_general_int_b3
-                            
+
 USB_general_int_b2:         ;device disconnected
 
                             out     PLLCSR, r1
-                            out     GPIOR0, r1
+                            clr     r10                     ;GPIOR0
 USB_general_int_b3:
                             lds     r24, UDINT
                             sbrs    r24, 0
@@ -964,7 +1026,7 @@ USB_general_int_b3:
                             rcall   USBCON_set
                             out     PLLCSR, r1
                             ldi     r24, 0x05
-                            out     GPIOR0, r24
+                            mov     r10, r24                ;GPIOR0
 USB_general_int_b4:
                             lds     r24, UDINT
                             sbrs    r24, 4
@@ -998,7 +1060,7 @@ USB_general_int_b4:
 USB_general_int_b6:
                             ldi     r24, 0x04               ;CDC_RX_EPNUM
 USB_general_int_b7:
-                            out     GPIOR0, r24
+                            mov     r10, r24                ;GPIOR0
 USB_general_int_b8:
                             lds     r24, UDINT
                             sbrs    r24, 3
@@ -1011,7 +1073,7 @@ USB_general_int_b8:
                             ldi     r24, 0xF7
                             rcall   UDINT_clr_bit
                             ldi     r24, 0x02
-                            out     GPIOR0, r24
+                            mov     r10, r24                ;GPIOR0
                             sts     USB_Device_ConfigurationNumber, r1
                             rcall   UDINT_clr_bit0
                             rcall   UDIEN_Clr0_Set4
@@ -1027,15 +1089,15 @@ shared_reti:
                             out     SREG, r0
                             pop     r0
                             reti
-                            
+
 ;-------------------------------------------------------------------------------
 reset_b0:
                             ;setup hardware
-                            
+
                             sts     CLKPR, r24              ;enable CLK prescaler change
                             sts     CLKPR, r1               ;PCLK/1
                             ldi     r27, (1 << IVCE)        ;== 0x01 enable interrupt vector select
-                            out     MCUCR, r27  
+                            out     MCUCR, r27
                             ldi     r24, 1 << IVSEL         ;select bootloader vectors
                             out     MCUCR, r24
                         #ifdef ARDUBOY_DEVKIT
@@ -1052,14 +1114,14 @@ reset_b0:
                           #if DEVICE_PID == 0x0037
                             ldi     r24, 0xF0               ;RGBLED OFF | PULLUP B-Button | RXLED OFF (Arduino micro)
                           #elif defined (MICROCADE)
-                            ldi     r24, 0x91               ;RGBLED BLUE+RED ON | PULLUP B-Button | RXLED OFF 
+                            ldi     r24, 0x91               ;RGBLED BLUE+RED ON | PULLUP B-Button | RXLED OFF
                           #else
-                            ldi     r24, 0xF1               ;RGBLED OFF | PULLUP B-Button | RXLED OFF 
-                          #endif    
-                            out     PORTB, r24  
+                            ldi     r24, 0xF1               ;RGBLED OFF | PULLUP B-Button | RXLED OFF
+                          #endif
+                            out     PORTB, r24
                             ldi     r24, 0xE7               ;RGBLED, SPI_CLK, MOSI, RXLED as outputs
-                            out     DDRB, r24   
-                        #if defined (ARDUBIGBOY)
+                            out     DDRB, r24
+                        #if defined (ARDUBIGBOY) || (ARDUBOYMINI)
                             ldi     r24, (1 << CART_CS)     ; Flash cart as output
                             out     DDRE, r24
                             ldi     r24, (1 << BTN_A_BIT) | (1 << CART_CS) ; Enable pullup for A button, Flash cart inactive high
@@ -1072,7 +1134,7 @@ reset_b0:
                             ldi     r24, 0xF3               ;pullups on D-PAD and unused inputs
                             out     PORTF, r24
                         #endif
-                            
+
                             ;setup display io and reset
 
                         #if defined (ARDUBOY_PROMICRO)
@@ -1081,7 +1143,7 @@ reset_b0:
                             out     PORTD, r24
                             ldi     r24, (1 << OLED_DC) | (1 << TX_LED) | (1 << RGB_G) | (1 << CART_CS) ; as outputs
                             out     DDRD, r24
-                          #else  
+                          #else
                            #if defined (MICROCADE)
                             ldi     r24, (0 << OLED_RST) | (1 << OLED_CS) | (0 << OLED_DC) | (1 << TX_LED) | (0 << RGB_G) | (1 << CART_CS) ;RST active low, CS inactive high, Command mode, Tx LED off, RGB green on, Flash cart inactive high
                            #else
@@ -1096,18 +1158,22 @@ reset_b0:
                             out     PORTD, r24
                             ldi     r24, (1 << OLED_RST) | (1 << OLED_CS) | (1 << OLED_DC) | (1 << TX_LED) | (1 << CART_CS) | (1 << POWER_LED); as outputs
                             out     DDRD, r24
-                        #elif defined (ARDUBIGBOY)
+                        #elif defined (ARDUBIGBOY) || (ARDUBOYMINI)
                             ldi     r24, (1 << OLED_CS) | (1 << TX_LED); RST active low, CS inactive high, Command mode, Tx LED off
                             out     PORTD, r24
                             ldi     r24, (1 << OLED_RST) | (1 << OLED_CS) | (1 << OLED_DC) | (1 << TX_LED); as outputs
                             out     DDRD, r24
                         #else
+                           #if !(defined (DS3231) || defined (RV3028))
                             ldi     r24, (0 << OLED_RST) | (1 << OLED_CS) | (0 << OLED_DC) | (1 << TX_LED) | (1 << CART_CS) ;RST active low, CS inactive high, Command mode, Tx LED off, Flash cart inactive high
+                           #else
+                            ldi     r24, (0 << OLED_RST) | (1 << OLED_CS) | (0 << OLED_DC) | (1 << TX_LED) | (1 << CART_CS) | (1 << I2C_SDA) | (1 << I2C_SCL) ;RST active low, CS inactive high, Command mode, Tx LED off, Flash cart inactive high, I2C inactive/pullups
+                           #endif
                             out     PORTD, r24
                             ldi     r24, (1 << OLED_RST) | (1 << OLED_CS) | (1 << OLED_DC) | (1 << TX_LED) | (1 << CART_CS); as outputs
                             out     DDRD, r24
                         #endif
-                            
+
                             ;setup SPI
 
                             ldi     r24,  (1 << SPE) | (1 << MSTR)  ;SPI no interrupt, SPI enable, MSB first, SPI master, mode 0, Fosc/4
@@ -1126,71 +1192,58 @@ reset_b1:
                             st      X+, r0                          ;to data section in sram
                             cpi     r26, lo8(__data_end)
                             brne    reset_b1
-                            
+
                             ;clear .bss section and remaining ram
 reset_b2:
-                            ;ld      r24, X                      ;after the loop, r24 contains last byte of RAM which is the power down flag
+                           #if defined (SUPPORT_POWERDOWN)
+                            ld      r24, X                      ;after the loop, r24 contains last byte of RAM which is the power down flag
+                           #endif
                             st      X+, r1                      ;set RAM to zero
                             cpi     r27, hi8(RAMEND+1)
                             brne    reset_b2
 
-                            sbrc    r16, EXTRF                  ;MCUSR state test external reset
-                            rjmp    bootloader_run              ;run bootloader if so
-                          
-                          ;#ifndef ARDUBOY_DEVKIT              //;DevKit doesn't have a reset button
-                          ;  sbrs    r16, EXTRF                  ;MCUSR state test external reset
-                          ;  rjmp    reset_por                   ;not external reset
-                          ;  
-                          ;  ;external reset
-                          ;  
-                          ;  cpi     r24, 0xAB ;POWER_DOWN_FLAG
-                          ;  brne    reset_por
-                          ;  
-                          ;  ;power down
-                          ; ;#if !(defined (ARDUBOY_PROMICRO) && defined (CART_CS_SDA))
-                          ; ; sbi     PORTD, OLED_RST             ;pull display out of reset 
-                          ; ;#endif
-                          ;  ldi     r24, SFC_POWERDOWN
-                          ;  rcall   SPI_flash_cmd_deselect
-                          ;  ldi     r24, (1 << ACD)             ;Disable Analog Comparator power
-                          ;  out     ACSR, r24
-                          ;  ldi     r24, (1 << PRTWI) | (1 << PRTIM0) | (1 << PRTIM1) | (1 << PRSPI) | (1 << PRADC) ;enable all power reductionss
-                          ;  sts     (PRR0),r24
-                          ;  ldi     r24, (1 << PRUSB) | (1 << PRTIM4)| (1 << PRTIM3) | (1 << PRUSART1)
-                          ;  sts     (PRR1), r24
-                          ;  ldi     r24, (1 << SM1) | (1 << SE) ;power down mode, enable sleep mode
-                          ;  out     SMCR, r24
-                          ;  sleep
-                          ;#endif  
+                           ;sbrc    r16, EXTRF                  ;MCUSR state test external reset
+                           ;rjmp    bootloader_run              ;run bootloader if so
+
+                          #if defined (SUPPORT_POWERDOWN)
+                           ;sbrs    r16, EXTRF                  ;MCUSR state test external reset
+                           ;rjmp    reset_por                   ;not external reset
+
+                           ;external reset
+
+                            cpi     r24, SFC_POWERDOWN
+                            brne    reset_por
+
+                            ;power down
+                           ;#if !(defined (ARDUBOY_PROMICRO) && defined (CART_CS_SDA))
+                           ; sbi     PORTD, OLED_RST             ;pull display out of reset
+                           ;#endif
+                            rcall   SPI_flash_cmd_deselect
+                            rjmp    powerdown
+                           #endif
+
                             ;test power on reset
-reset_por:                 
+reset_por:
                            #ifdef  RUN_APP_ON_POWERON
-                            sbrs    r16, PORF                   ;MCUSR state test power on reset (start with game config)
-                            rjmp    bootloader_run              ;not POR, enter bootloader
+                            sbrc    r16, PORF                   ;MCUSR state test power on reset. only do button test on POR
                            #else
-                            nop                                 ;nop (always start with bootloader config)
-                            rjmp    bootloader_run              ;not POR, enter bootloader
+                            rjmp    bootloader_run              ;always enter bootloader
                            #endif
 
                             ;power on reset
 
                             sbis    BTN_DOWN_PIN, BTN_DOWN_BIT  ;test DOWN button
                             rjmp    bootloader_run              ;button pressed, enter bootloader
-                            
-                            ;test EEPROM preference (removed)
-                            
-                            ;rcall   eeprom_read
-                            ;tst     r24
-                            ;brmi    bootloader_run              ;bit 7 set (default) run bootloader
 run_sketch:
                             rcall   TestApplicationFlash
                             brne    StartSketch                 ;run application when loaded
-                            
+
                             ;enter bootloader mode
 bootloader_run:
                             rcall   SetupHardware_bootloader    ;setup additional hardware
                             sei
                             rcall   LoadApplicationInfo
+                           #if !(defined (DS3231) || defined (RV3028))
                             breq    bootloader_loop
 
                             ;flash cart not initialized, display USB icon
@@ -1210,57 +1263,74 @@ DisplayBootGfx_l2:
                             sbci    r27, hi8(-(WIDTH - BOOTLOGO_WIDTH))
                             cpi     r30,lo8(bootgfx_end)
                             brne    DisplayBootGfx_l1
-                            
+
                             ;display USB icon
 
                             rcall   Display
-                            
+                           #endif
+
 bootloader_loop:
                             rcall   CDC_Task
                             rcall   USB_USBTask
+                           #if !(defined (DS3231) || defined (RV3028))
                             lds     r24, LED_Control
                             andi    r24, 1 << LED_CTRL_NOBUTTONS
                             brne    bootloader_next              ;no menu control
+                           #endif
 
                             ;read buttons
-                            
+
                           #ifdef ARDUBOY_DEVKIT
-                            in	    r24, PINB                   ;down, left, up buttons
+                            in      r24, PINB                   ;down, left, up buttons
                             com     r24
                             andi    r24, 0x70
                             sbis    PINC, BTN_RIGHT_BIT
-                            ori	    r24, 1 << RIGHT_BUTTON
+                            ori     r24, 1 << RIGHT_BUTTON
                           #else
-                            in	    r24, PINF                   ;directional buttons
+                            in      r24, PINF                   ;directional buttons
                             com     r24
                             andi    r24, 0xF0
                           #endif
                             sbic    BTN_A_PIN, BTN_A_BIT
                             sbis    BTN_B_PIN, BTN_B_BIT
-                            ori	    r24, 1 << AB_BUTTON         ;both buttons single function
+                            ori     r24, 1 << AB_BUTTON         ;both buttons single function
                             mov     r9, r24                     ;save buttons state
 
                             ;select list, game
-                            
+
                             rcall   SelectList
-                            
-                          ;#ifndef ARDUBOY_DEVKIT              //;DevKit doesn't have a reset button
-                          ;  ldi     r24, 0xAB ;POWER_DOWN_FLAG
-                          ;  eor     r24, r8                    ;xor list so only a reset on loader screen powers down
-                          ;  sts     (RAMEND), r24
-                          ;#endif
-                          
+
+                          #if defined (SUPPORT_POWERDOWN)
+                            ldi     r24, SFC_POWERDOWN
+                            eor     r24, r8                    ;xor list so only a reset on loader screen powers down
+                            sts     (RAMEND), r24
+                          #endif
+
                             cpse    r8, r1                      ;skip no game list selected
                             rcall   SelectGame
                             sbrc    r9, AB_BUTTON               ;skip if not pressed
                             rjmp    bootloader_run_last
-bootloader_next:                            
+
+                           #if defined (DS3231) || defined (RV3028)
+
+                            ;show time on every 15th frame while on loader screen
+
+                            ldi     r24, 0x0F                   ;every 16 frames mask
+                            and     r24, r2                     ;frame counter
+                            or      r24, r8                     ;selected list
+                            brne    bootloader_next             ;skip if not at 16th frame and not on loader screen
+
+                            rcall   DrawDateTime
+                            rcall   Display
+
+                           #endif
+bootloader_next:
                             tst     r3                          ;test sign bit as timeout
                             brpl    bootloader_loop             ;no timeout
-bootloader_run_last:                            
+bootloader_run_last:
                             rcall   TestApplicationFlash
                             breq    bootloader_loop             ;no sketch
-                            
+
 ;-------------------------------------------------------------------------------
 StartSketch:
                             cli
@@ -1275,14 +1345,162 @@ StartSketch:
                             ldi     r24, 1 << IVCE      ;enable interrupt vector change
                             out     MCUCR, r24
                             out     MCUCR, r1           ;relocate vector table to application section
+                          #if !(defined (DS3231) || defined (RV3028))
                            #ifndef MICROCADE
                             RGB_RED_OFF
                             RGB_GREEN_OFF
                             RGB_BLUE_OFF
                            #endif
+                          #endif
                             TX_LED_OFF
                             RX_LED_OFF
                             jmp     0                   ; start application
+
+;-------------------------------------------------------------------------------
+
+                           #if defined (DS3231) || defined (RV3028)
+DrawDateTime:
+                            ;start with reading date and time from RTC
+
+                            rcall   i2c_enable_start
+                            ldi     r24, SLA_W          ;write slave address for write
+                            rcall   i2c_write
+                            ldi     r24, 0              ;select seconds register
+                            rcall   i2c_write
+                            rcall   i2c_stop
+                            rcall   i2c_start
+                            ldi     r24, SLA_R          ;write slave address for read
+                            rcall   i2c_write
+
+                            ldi     r28, lo8(DateTime)
+                            ldi     r29, hi8(DateTime)
+read_rtc_loop:
+                            ldi     r24, (1 << TWINT) | (1 << TWEA) | (1 << TWEN)   ;read ack
+                            rcall   i2c_cmd
+                            ldd     r24, Z+3            ;Y++ = TWDR
+                            st      Y+, r24
+                            cpi     r28, lo8(DateTimeLast)
+                            brne    read_rtc_loop       ;not last, read another byte using readAck
+                            rcall   i2c_nack            ;read Nack 6th last byte
+                            ldd     r24, Z+3            ; Y = TWDR
+                            st      Y+, r24
+                            rcall   i2c_stop
+                            std     Z+4, r1             ;TWCR = disable
+
+                            ;now draw the date and time
+
+                            sbiw    r28, DateTimeSize   ;point back to start of DateTime struct
+                            ldi     r26,lo8(DATE_POS)
+                            ldi     r27,hi8(DATE_POS)
+                            ldd     r24, Y + IDX_MONTH
+                            rcall   DrawLargeDoubleDigit
+                            adiw    r26, DATE_SEP
+                            ldd     r24, Y + IDX_DATE
+                            rcall   DrawLargeDoubleDigit
+                            ldi     r26,lo8(TIME_POS)
+                            ldi     r27,hi8(TIME_POS)
+
+                            ;test 12/24 hour mode
+
+                            ldd     r25, Y + IDX_HOURMODE   ;get 12/24 hour mode
+                            andi    r25, MSK_HOURMODE
+                            ldd     r24, Y + IDX_HOUR
+                            breq    Draw_hours              ;skip no changes for 24 hour mode
+
+                            ;for 12-hour mode use leading space for hours < 10
+
+                            andi    r24, 0x1F               ;keep hours only
+                            sbrs    r24, 4                  ;skip if not leading zero
+                            subi    r24, -0xA0              ;else use 11th digit leading space
+Draw_hours:
+                            rcall   DrawLargeDoubleDigit
+                            adiw    r26, TIME_SEP
+                            ldd     r24, Y + IDX_MIN
+                            rcall   DrawLargeDoubleDigit
+
+                            ;test 12/24-hour mode again
+
+                            tst     r25
+                            breq    DrawSeconds             ;skip 24-hour mode
+
+                            ;draw am/pm icon
+
+                            ldd     r24, Y + IDX_HOUR
+                            lsr     r24                     ;am/pm flag to bit 4
+                            andi    r24, 0x10               ;get am/pm index
+                            ldi     r30,lo8(AmPmIcon)       ;am/pm graphics pointer
+                            ldi     r31,hi8(AmPmIcon)
+                            ldi     r20,10                  ;width
+                            rcall   DrawAmPmIcon
+
+                            ;draw seconds
+DrawSeconds:
+                            ldi     r26,lo8(SEC_POS)
+                            ldi     r27,hi8(SEC_POS)
+                            ldd     r24, Y + IDX_SEC
+                            ;rjmp    DrawSmallDoubleDigit
+
+DrawSmallDoubleDigit:
+                            rcall   DrawSmallDigit
+
+DrawSmallDigit:
+                            ldi     r30,lo8(SmallDigits)    ;large digits graphics pointer
+                            ldi     r31,hi8(SmallDigits)
+                            ldi     r20,5                   ;width
+DrawAmPmIcon:
+                            ldi     r21,1                   ;height
+                            rjmp    DrawDigit
+
+DrawLargeDoubleDigit:
+                            rcall   DrawLargeDigit
+
+DrawLargeDigit:
+                            ldi     r30, lo8(LargeDigits)    ;seconds digits graphics pointer
+                            ldi     r31, hi8(LargeDigits)
+                            ldi     r20,7                   ;width
+                            ldi     r21,2                   ;height
+
+;draws most significant nibble as digit
+
+DrawDigit:
+
+;entry:
+;   r24     = bcd value
+;   r20     = width in columns
+;   r21     = height in rows
+;   r26,r27 = display
+;   r30,r31 = gfx
+;exit:
+;   r24     = bcd value with swapped nibbles
+;   r26,r27 = display address of next column
+
+;uses:
+;   r0, r20, r22, r23, r30, r31
+
+                            mul     r21, r20        ;size = rows*columns
+                            swap    r24             ;swap high and low digits
+                            mov     r22, r24        ;keep lower digit only
+                            andi    r22, 0x0F
+                            mul     r22, r0         ;offset = digit * size
+                            add     r30, r0         ;add offset to digit gfx pointer
+                            adc     r31, r1
+DrawDigit_col:
+                            movw    r22, r26        ;save displayBuffer position
+                            mov     r1, r21         ;get row
+DrawDigit_row:
+                            ld      r0, z+          ;gfx to display buffer
+                            st      x, r0
+                            subi    r26, lo8(-WIDTH);display buffer += WIDTH
+                            sbci    r27, hi8(-WIDTH)
+                            dec     r1
+                            brne    DrawDigit_row
+                            movw    r26, r22        ;restore displayBuffer position
+                            adiw    r26, 1          ;displayBuffer++
+                            dec     r20
+                            brne    DrawDigit_col   ;loop next column
+                            ret
+
+                           #endif
 ;-------------------------------------------------------------------------------
 FetchNextCommandByte:
 ;                       entry:  none
@@ -1295,7 +1513,7 @@ FetchNextCommandByte_b1:
                             rcall   UEINTX_clear_FIFOCON_RXOUTI
                             rjmp    FetchNextCommandByte_b3
 FetchNextCommandByte_b2:
-                            rcall   GPIOR0_test
+                            tst     r10                         ;GPIOR0_test
                             breq    FetchNextCommandByte_ret
 FetchNextCommandByte_b3:
                             rcall   UEINTX_get
@@ -1323,7 +1541,7 @@ WriteNextResponseByte:
                             rcall   UEINTX_clear_FIFOCON_TXINI
                             rjmp    WriteNextResponseByte_b2
 WriteNextResponseByte_b1:
-                            rcall   GPIOR0_test
+                            tst     r10                         ;GPIOR0_test
                             breq    WriteNextResponseByte_ret
 WriteNextResponseByte_b2:
                             rcall   UEINTX_get
@@ -1331,9 +1549,11 @@ WriteNextResponseByte_b2:
                             rjmp    WriteNextResponseByte_b1
 WriteNextResponseByte_b3:
                             sts     UEDATX, r0
+                           #if !(defined(DS3231) || defined (RV3028))
                             lds     r24, LED_Control
                             andi    r24, 1 << LED_CTRL_RXTX
                             brne    WriteNextResponseByte_ret           ;RxTx LEDs disabled
+                           #endif
                             TX_LED_ON
                             ldi     r24, lo8(TX_RX_LED_PULSE_PERIOD)
                             sts     TxLEDPulse, r24
@@ -1344,11 +1564,12 @@ CDC_Task:
                             rcall   UENUM_set_04_UEINTX_get
                             sbrs    r24, RXOUTI
                             rjmp    CDC_Task_ret
-
+                           #if !(defined(DS3231) || defined (RV3028))
                             ;endpoint has command from host
                             lds     r24, LED_Control
                             andi    r24, 1 << LED_CTRL_RXTX
                             brne    CDC_Task_b1                     ;RxTx LEDs disabled
+                           #endif
                             RX_LED_ON
                             ldi     r24, lo8(TX_RX_LED_PULSE_PERIOD)
                             sts     RxLEDPulse, r24
@@ -1381,22 +1602,22 @@ CDC_Task_Command_L:         ;-----------------------------------leave programmin
                             cpi     r24, 'P'
                             breq    CDC_Task_Acknowledge     ;just acknowledge
 
-                            ;-----------------------------------Requestsupported device list
+                            ;-----------------------------------Request supported device list
                             cpi     r24, 't'
                             brne    CDC_Task_Command_a
 
                             ;'t': Return ATMEGA128 part code - this is only to allow AVRProg to use the bootloader
 
-                            ldi     r24, 0x44                   ;supported device
-                            rcall   WriteNextResponseByte
+                            ;ldi     r24, 0x44                   ;supported device  (not required for AVRdude)
+                            ;rcall   WriteNextResponseByte
                             ldi     r24, 0x00                   ;end of supported devices list
                             rjmp    CDC_Task_Response
-CDC_Task_Command_a:         ;-----------------------------------auto address increment inquiry
-                            cpi     r24, 'a'
-                            brne    CDC_Task_Command_A
-
-                            ldi     r24, 'Y'                    ;'Y'es supported
-                            rjmp    CDC_Task_Response
+CDC_Task_Command_a:         ;-----------------------------------auto address increment inquiry (not required AVRdude)
+                            ;cpi     r24, 'a'
+                            ;brne    CDC_Task_Command_A
+                            ;
+                            ;ldi     r24, 'Y'                    ;'Y'es supported
+                            ;rjmp    CDC_Task_Response
 CDC_Task_Command_A:         ;-----------------------------------set current address / flash sector
                             cpi     r24, 'A'
                             brne    CDC_Task_Command_p
@@ -1406,12 +1627,12 @@ CDC_Task_Command_A:         ;-----------------------------------set current addr
                             rcall   FetchNextCommandByte
                             mov     r4, r24
                             rjmp    CDC_Task_Acknowledge
-CDC_Task_Command_p:         ;-----------------------------------programmer type
-                            cpi     r24, 'p'
-                            brne    CDC_Task_Command_S
-
-                            ldi     r24, 'S'                ;'S'erial programmer
-                            rjmp    CDC_Task_Response
+CDC_Task_Command_p:         ;-----------------------------------programmer type (not required AVRdude)
+                            ;cpi     r24, 'p'
+                            ;brne    CDC_Task_Command_S
+                            ;
+                            ;ldi     r24, 'S'                ;'S'erial programmer
+                            ;rjmp    CDC_Task_Response
 CDC_Task_Command_S:         ;-----------------------------------send software identifier string response
                             cpi     r24, 'S'
                             brne    CDC_Task_Command_V
@@ -1433,6 +1654,7 @@ CDC_Task_Command_V:         ;-----------------------------------Software version
                             ldi     r24, BOOTLOADER_VERSION_MINOR
                             rjmp    CDC_Task_Response
 CDC_Task_Command_v:         ;-----------------------------------Hardware version
+                           #if !(defined (DS3231) || defined (RV3028))
                             cpi     r24, 'v'
                             brne    CDC_Task_Command_x
 
@@ -1479,7 +1701,7 @@ CDC_Task_Command_x:         ;-----------------------------------set LEDs
                             clr     r8
                             andi    r24, 0x07                   ;test RGB LED off
                             brne    .+2
-                            ori     r24, 0x07                   ;if so change to white 
+                            ori     r24, 0x07                   ;if so change to white
                            #endif
                             RGB_RED_OFF
                             sbrc    r24,LED_CTRL_RGB_R_ON
@@ -1495,6 +1717,7 @@ CDC_Task_Command_x:         ;-----------------------------------set LEDs
                             clr     r8                          ;reset menu to bootloader list
                            #endif
                             rjmp    CDC_Task_Acknowledge
+                           #endif
 CDC_Task_Command_j:
                             cpi     r24, 'j'
                             brne    CDC_Task_Command_s
@@ -1522,20 +1745,20 @@ CDC_Task_Command_s:         ;-----------------------------------avr signature
                             ldi     r24, AVR_SIGNATURE_1
                             rjmp    CDC_Task_Response
 CDC_Task_Command_e:         ;-----------------------------------
-                            cpi     r24, 'e'                            ;erase chip
-                            brne    CDC_Task_Command_b
-
-                            ;'e': erase application section
-
-                            ldi     r30, lo8(BOOT_START_ADDR - SPM_PAGESIZE)
-                            ldi     r31, hi8(BOOT_START_ADDR - SPM_PAGESIZE)
-CDC_Task_Erase:
-                            ;ldi     r24, (1 << PGERS) | (1 << SPMEN)    ;Page erase
-                            rcall   SPM_page_erase
-                            subi    r30, lo8(SPM_PAGESIZE)
-                            sbci    r31, hi8(SPM_PAGESIZE)
-                            brcc    CDC_Task_Erase                      ;loop until 1st application page done
-                            rjmp    CDC_Task_Acknowledge
+                           ; cpi     r24, 'e'                            ;erase chip
+                           ; brne    CDC_Task_Command_b
+                           ;
+                           ; ;'e': erase application section
+                           ;
+                           ; ldi     r30, lo8(BOOT_START_ADDR - SPM_PAGESIZE)
+                           ; ldi     r31, hi8(BOOT_START_ADDR - SPM_PAGESIZE)
+CDC_Task_Erase:            ;
+                           ; ;ldi     r24, (1 << PGERS) | (1 << SPMEN)    ;Page erase
+                           ; rcall   SPM_page_erase
+                           ; subi    r30, lo8(SPM_PAGESIZE)
+                           ; sbci    r31, hi8(SPM_PAGESIZE)
+                           ; brcc    CDC_Task_Erase                      ;loop until 1st application page done
+                           ; rjmp    CDC_Task_Acknowledge
 CDC_Task_Command_b:         ;-----------------------------------block support command
                             cpi     r24, 'b'
                             brne    CDC_Task_Command_B
@@ -1638,7 +1861,7 @@ CDC_Task_Write_cart_data:
                             out     SPDR, r24                   ;SPI transfer without wait
                             dec     r28                         ;test last page byte written
                             brne    CDC_Task_Write_cart_data
-                            
+
                             adiw    r30, 1                      ;next page
                             rcall   SPI_wait                    ;wait for last SPI transfer to complete
                             rcall   SPI_flash_wait              ;program page amd wait to complete
@@ -1694,14 +1917,16 @@ CDC_Task_WriteMem_display:
 
                             ;OLED display
 
+                           #if !(defined (DS3231) || defined (RV3028))
                             movw    r26, r30                    ;current addr
                             andi    r27, 0x3                    ;keep 1K address range
                             subi    r26, lo8(-(DisplayBuffer))
                             sbci    r27, hi8(-(DisplayBuffer))
                             st      X+, r24
                             adiw    r30, 1
+                           #endif
                             rjmp    CDC_Task_WriteMem_next
-                            
+
                             ;EEPROM
 CDC_Task_WriteMem_eeprom:
                             rcall   eeprom_write
@@ -1711,6 +1936,7 @@ CDC_Task_WriteMem_next:
 
                             ;block write complete
 
+                           #if !(defined (DS3231) || defined (RV3028))
                             cpi     r16, 'D'
                             brne    CDC_Task_WriteMem_flash_end
 
@@ -1722,6 +1948,7 @@ CDC_Task_WriteMem_next:
                             brne    CDC_Task_WriteMem_end               ;update display on 1K overflow
                             rcall   Display
                             rjmp    CDC_Task_WriteMem_end
+                           #endif
 CDC_Task_WriteMem_flash_end:
                             cpi     r16, 'F'
                             brne    CDC_Task_WriteMem_end
@@ -1802,7 +2029,7 @@ CDC_Task_Complete:          ;-----------------------------------
                             rjmp    x76d6
                             rjmp    x76f0
 
-x76d0:                      rcall   GPIOR0_test
+x76d0:                      tst     r10                         ;GPIOR0_test
                             breq    CDC_Task_ret
 
 x76d6:                      rcall   UEINTX_get
@@ -1812,7 +2039,7 @@ x76d6:                      rcall   UEINTX_get
                             rcall   UEINTX_clear_FIFOCON_TXINI
                             rjmp    x76f0
 
-x76ea:                      rcall   GPIOR0_test
+x76ea:                      tst     r10                         ;GPIOR0_test
                             breq    CDC_Task_ret
 
 x76f0:                      rcall   UEINTX_get
@@ -1844,46 +2071,43 @@ EVENT_USB_Device_ControlRequest:
                             brne    EVENT_USB_Device_ControlRequest_ret
 
                             ;REQUEST_DEVICETOHOST_CLASS_INTERFACE
-                            
+
                             cpi     r24, CDC_REQ_GetLineEncoding
                             brne    EVENT_USB_Device_ControlRequest_ret
                             rcall   UEINTX_clear_RXSTPI
-                            ;rcall   LineEncoding_sub
                             rjmp    Endpoint_Write_Control_Stream_LE
-                            
+
 EVENT_USB_Device_ControlRequest_b1:
                             ;REQUEST_HOSTTODEVICE_CLASS_INTERFACE
 
                             cpi     r24, CDC_REQ_SetControlLineState
                             brne    EVENT_USB_Device_ControlRequest_b2
-                            
+
                             ld      r24, z+         ;check LineEncoding.BaudRateBPS
                             subi    r24, lo8(1200)
                             ld      r24, z+
                             sbci    r24, hi8(1200)
-                            ;ld      r24, z+
-                            ;sbci    r24, 0
-                            ;ld      r24, z+
-                            ;sbci    r24, 0
                             brne    EVENT_USB_Device_ControlRequest_ret ;return baudrate != 1200
-                            
+
                             lds     r24, USB_ControlRequest_wValueL
-                            sbrc    r24, 0                              
+                            sbrc    r24, 0
                             rjmp    EVENT_USB_Device_ControlRequest_ret ;return DTR set
-                          
+
                             ;reset bootloader
-                            
+
                             cli                         ;disabgle interrupts
                             ldi     r24, 1 << DETACH    ;USB DETACH
                             sts     UDCON, r24
+                           #if defined (SUPPORT_POWERDOWN)
+                            sts     (RAMEND), r1        ;prevent shutdown on restart
+                           #endif
                             rjmp    VECTOR_00_7800      ;restart bootloader
-                            
-EVENT_USB_Device_ControlRequest_b2:                            
+
+EVENT_USB_Device_ControlRequest_b2:
                             cpi     r24, CDC_REQ_SetLineEncoding
                             brne    EVENT_USB_Device_ControlRequest_ret
 
                             rcall   UEINTX_clear_RXSTPI
-                            ;rcall   LineEncoding_sub
                             ;rcall   Endpoint_Read_Control_Stream_LE
                             ;rjmp   UEINTX_clear_FIFOCON_TXINI
 
@@ -1894,7 +2118,7 @@ Endpoint_Read_Control_Stream_LE:
 ;   r30:31 points to LineEncoding, r22 lineEncoding length
 
 Endpoint_Read_CtrlStrm_b2:
-                            rcall   GPIOR0_test
+                            tst     r10                         ;GPIOR0_test
                             breq    Endpoint_Read_CtrlStrm_ret
 
                             cpi     r24, 5
@@ -1924,7 +2148,7 @@ Endpoint_Read_CtrlStrm_b7:
                             brne    Endpoint_Read_CtrlStrm_b2   ;length != 0
                             rjmp    Endpoint_Read_CtrlStrm_b9
 Endpoint_Read_CtrlStrm_b8:
-                            rcall   GPIOR0_test
+                            tst     r10                         ;GPIOR0_test
                             breq    Endpoint_Read_CtrlStrm_ret
 
                             cpi     r24, 5
@@ -2038,12 +2262,12 @@ CALLBACK_USB_GetDescriptor:
                             ldi     r22, 0x00                  ;zero length for unsupported types
                             cpi     r25, 0x02                   ;DTYPE_Configuration
                             breq    CALLBACK_USB_GetDesc_conf
-                            
+
                           #if defined (USE_LANGUAGE_STRING) || (USE_PRODUCT_STRING) || (USE_LANGUAGE_STRING)
                             cpi     r25, 0x03                   ;DTYPE_String
                             breq    CALLBACK_USB_GetDesc_str
                           #endif
-                          
+
                             cpi     r25, 0x01                   ;DTYPE_Device
                             brne    CALLBACK_USB_GetDesc_ret
 
@@ -2090,7 +2314,7 @@ CALLBACK_USB_GetDesc_b1:
                           #if defined (USE_MANUFACTURE_STRING)
                             rjmp    CALLBACK_USB_GetDesc_ret
                           #endif
-                          
+
                             ;>1:
 CALLBACK_USB_GetDesc_b2:
                           #if defined (USE_MANUFACTURE_STRING)
@@ -2104,7 +2328,7 @@ CALLBACK_USB_GetDesc_b2:
                           #endif
 CALLBACK_USB_GetDesc_ret:
                             ldi     r31, hi8(DeviceDescriptor) ;all descriptor data in same 256 byte page
-Endpoint_ClearStatus_ret:                            
+Endpoint_ClearStatus_ret:
                             ret
 ;-------------------------------------------------------------------------------
 Endpoint_ClearStatusStage:
@@ -2114,7 +2338,7 @@ Endpoint_ClearStatusStage:
 
                             rjmp    Endpoint_ClearStatus_b2
 Endpoint_ClearStatus_b1:
-                            rcall   GPIOR0_test
+                            tst     r10                         ;GPIOR0_test
                             breq    Endpoint_ClearStatus_ret
 Endpoint_ClearStatus_b2:
                             rcall   UEINTX_get
@@ -2122,7 +2346,7 @@ Endpoint_ClearStatus_b2:
                             rjmp    Endpoint_ClearStatus_b1
                             rjmp    UEINTX_clear_FIFOCON_RXOUTI
 Endpoint_ClearStatus_b3:
-                            rcall   GPIOR0_test
+                            tst     r10                         ;GPIOR0_test
                             breq    Endpoint_ClearStatus_ret
 Endpoint_ClearStatus_b4:
                             rcall   UEINTX_get
@@ -2147,17 +2371,17 @@ x7b86:
                             mov     r20, r22
                             cp      r22, r1
                             brne    x7b80
-x7b90:                      
+x7b90:
                             rcall   UEINTX_clear_FIFOCON_TXINI
 
                             ;ControlRequest_wLength < length
 x7b80:
                             ldi     r21, 0x00                           ;LastPacketFull = false
                             rjmp    x7c0e                               ;continue
-                            
+
                             ;---- r0 > 0 or LastPacketFull
 x7ba0:
-                            rcall   GPIOR0_test
+                            tst     r10                         ;GPIOR0_test
                             breq    x7c30
 
                             cpi     r24, 0x05
@@ -2184,7 +2408,7 @@ x7be0:
                             sts     UEDATX, r24             ;to USB
                             subi    r20, 0x01               ;length--
                             subi    r18, 0xFF               ;BytesInEndPoint++
-                            sbci    r19, 0xFF               
+                            sbci    r19, 0xFF
 x7bee:
                             cp      r20, r1
                             breq    x7bfa                   ;length = 0
@@ -2201,19 +2425,19 @@ x7bfa:
                             ldi     r21, 0x01               ;LastPacketFull = true
 x7c04:
                             rcall   UEINTX_clear_FIFOCON_TXINI
-                            
+
                             ;loop
 x7c0e:
                             cp      r20, r1
                             brne    x7ba0
 
                             ;r20 = 0
-                            
+
                             and     r21, r21
                             brne    x7ba0                   ;LastPacketFull
                             rjmp    x7c24
 x7c1a:
-                            rcall   GPIOR0_test
+                            tst     r10                     ;GPIOR0_test
                             breq    x7c30
 
                             cpi     r24, 0x05
@@ -2232,7 +2456,7 @@ USB_Device_ProcessControlRequest:
                             ldi  r31, hi8(USB_ControlRequest)
 
                             ;read USB_ControlRequest
-                            
+
 USB_Device_ProcessControlRequest_b1:
                             rcall   UEDATX_get
                             st      Z+, r24
@@ -2298,12 +2522,12 @@ x7d20:
 
 x7d60:                      and     r24, r24    ;USB_ControlRequest_bmRequestType
                             breq    x7d6a
-                            
+
                             cpi     r24, 0x02
                             brne    jmp_x7eb2
 
                             ;0,2:
-                            
+
 x7d6a:                      andi    r24, 0x1F
                             cpi     r24, 0x02
                             brne    jmp_x7eb2
@@ -2368,7 +2592,7 @@ x7dee:                      rcall   UEINTX_get
 
                             ldi     r24, 0x02
 x7e12:
-                            out     GPIOR0, r24
+                            mov     r10, r24    ;GPIOR0
                             out     SREG, r16
 jmp_x7eb2_2:
                             rjmp    x7eb2
@@ -2421,7 +2645,7 @@ x7e7c:                      and     r24, r24
                             ldi     r25, 0x01       ;DEVICE_STATE_Powered
                             sbrc    r24, 7
 x7eac:                      ldi     r25, 0x04       ;DEVICE_STATE_Configured
-                            out     GPIOR0, r25
+                            mov     r10, r25        ;GPIOR0
                             rcall   EVENT_USB_Device_ConfigurationChanged
 x7eb2:
                             rcall   UEINTX_get
@@ -2435,11 +2659,6 @@ x7eb2:
 UEINTX_clear_RXSTPI:
                             ldi     r24, ~(1 << RXSTPI)
                             rjmp    UEINTX_clearbits
-;-------------------------------------------------------------------------------
-GPIOR0_test:
-                            in      r24, GPIOR0
-                            and     r24, r24
-                            ret
 ;-------------------------------------------------------------------------------
 ;flash PROGMEM
 ;-------------------------------------------------------------------------------
@@ -2512,7 +2731,7 @@ pll_wait_locked:
                             ret
 ;-------------------------------------------------------------------------------
 USB_USBTask:
-                            rcall   GPIOR0_test
+                            tst     r10                     ;GPIOR0_test
                             breq    USB_USBTask_ret         ;ret, zero
 
                             lds     r24, UENUM
@@ -2584,37 +2803,39 @@ TestApplicationFlash:
                             lpm     r25, Z
                             adiw    r24, 1
                             ret
-;-------------------------------------------------------------------------------                            
+;-------------------------------------------------------------------------------
 SetupHardware_bootloader:
                             ;pull display out of reset and activate flash CART CS
-                            
+
                         #if defined (ARDUBOY_PROMICRO)
                           #ifdef CART_CS_SDA
                             ldi     r24,  (1 << TX_LED) | (1 << RGB_G) ;Command mode, Tx LED off, RGB green off, Flash cart active
                             out     PORTD, r24
-                          #else   
+                          #else
                            #if defined (MICROCADE)
                             ldi     r24, (1 << OLED_RST) | (1 << TX_LED) | (0 << RGB_G)  | (1 << OLED_CS) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, RGB green on, Flash cart active
                            #else
                             ldi     r24, (1 << OLED_RST) | (1 << TX_LED) | (1 << RGB_G)  | (1 << OLED_CS) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, RGB green off, Flash cart active
                            #endif
                             out     PORTD, r24
-                          #endif   
-                        #elif defined (ARDUBIGBOY)
+                          #endif
+                        #elif defined (ARDUBIGBOY) || (ARDUBOYMINI)
                             cbi     PORTE, CART_CS      ;enable SPI flash cart
                             sbi     PORTD, OLED_RST     ;RST inactive
                         #else
-                            ldi     r24, (1 << OLED_RST) | (1 << TX_LED)  | (1 << OLED_CS) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, Flash cart active
+                           #if defined (DS3231) || defined (RV3028)
+                            ldi     r24, (1 << OLED_RST) | (1 << TX_LED)  | (1 << OLED_CS) | (1<< CART_CS) | (1 << I2C_SDA) | (1 << I2C_SCL) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, Flash cart inactive, I2C inactive
+                           #else
+                            ldi     r24, (1 << OLED_RST) | (1 << TX_LED)  | (1 << OLED_CS) | (1<< CART_CS) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, Flash cart inactive
+                           #endif
                             out     PORTD, r24
                         #endif
-                            
+
                             ;release SPI flash from power down
 
                             ldi     r24, SFC_RELEASE_POWERDOWN
                             rcall   SPI_flash_cmd_deselect
-                            
-                            ;
-                            
+
                             sts     OCR1AH, r1
                             ldi     r24, 0xFA           ;for 1 millisec (PCLK/64/1000)
                             sts     OCR1AL, r24
@@ -2624,13 +2845,13 @@ SetupHardware_bootloader:
                             sts     TCCR1B, r24
 
                             ;clear all display ram for SSD132X displays
-                            
+
                            #if defined (OLED_SSD132X_96X96) || (OLED_SSD132X_128X96) || (OLED_SSD132X_128X128)
                             rcall   Display                     ;also selects data mode
                             rcall   Display
                             cbi     PORTD, OLED_DC              ;select command mode
                            #endif
-                           
+
                             ;Setup display
 
                             ldi     r30,lo8(DisplaySetupData)
@@ -2659,7 +2880,7 @@ USB_Init:
                             ldi     r24, 0x80               ;USBE
                             rcall   USBCON_set
                             out     PLLCSR, r1
-                            out     GPIOR0, r1
+                            clr     r10                     ;GPIOR0
                             ;sts     USB_Device_ConfigurationNumber, r1     ;(cleared by BSS init)
                             sts     UDCON, r1                               ;full speed
                             rcall   Endpoint_ConfigureEndpoint_Prv_00_00_02
@@ -2722,7 +2943,7 @@ SPI_flash_cmd:
                         #if !(defined (CART_CS_SDA) && defined(ARDUBOY_PROMICRO))
                             sbi     PORTD, OLED_CS      ;disable display
                         #endif
-                        #if defined (ARDUBIGBOY)
+                        #if defined (ARDUBIGBOY) || (ARDUBOYMINI)
                             cbi     PORTE, CART_CS      ;enable SPI flash cart
                         #else
                             cbi     PORTD, CART_CS      ;enable SPI flash cart
@@ -2739,7 +2960,7 @@ SPI_flash_wait_2:           rcall   SPI_transfer        ;read status reg
                             ;rjmp   SPI_flash_deselect
 ;-------------------------------------------------------------------------------
 SPI_flash_deselect:
-                        #if defined(ARDUBIGBOY)
+                        #if defined(ARDUBIGBOY) || (ARDUBOYMINI)
                             sbi     PORTE, CART_CS      ;deselect SPI flash cart to complete command
                         #else
                             sbi     PORTD, CART_CS      ;deselect SPI flash cart to complete command
@@ -2759,7 +2980,7 @@ SPI_wait:
                             in      r24, SPDR
                             ret
 ;-------------------------------------------------------------------------------
-SPI_flash_deselect_display_wait:                
+SPI_flash_deselect_display_wait:
                             ldi     r24, 0x0F   ;every 16 frames
                             and     r24, r2
                             brne    SPI_flash_deselect_display_wait
@@ -2780,7 +3001,7 @@ Display:
                         #if defined(OLED_SSD132X_96X96)
                             ldi     r30, lo8(DisplayBuffer + 16)
                             ldi     r31, hi8(DisplayBuffer + 16)
-                        #else   
+                        #else
                             ldi     r30, lo8(DisplayBuffer)
                             ldi     r31, hi8(DisplayBuffer)
                         #endif
@@ -2827,7 +3048,7 @@ Display_l1:
                             ldi     r24, OLED_SET_COLUMN_ADDR_HI
                             rcall   SPI_transfer                    ;select column hi nibble
                             sbi     PORTD, OLED_DC                  ;Data mode
-Display_l2:                 
+Display_l2:
                             ld      r24, Z+
                             rcall   SPI_transfer
                             ldi     r24, lo8(DisplayBuffer)
@@ -2845,11 +3066,6 @@ SelectGame:
 
 ;Note: select game may only be called after SelectList or successful LoadApplicationInfo
 
-                           #if defined (LCD_ST7565) || (MICROCADE)
-                           ;RGB_RED_ON                      ;force white backlight for LCD display
-                           ;RGB_GREEN_ON
-                           ;RGB_BLUE_ON
-                           #endif
                             ldi     r30, lo8(FlashBuffer)
                             ldi     r31, hi8(FlashBuffer)
                             sbrc    r9, UP_BUTTON
@@ -2864,7 +3080,7 @@ SelectGame_ret:             ret
                             ldd     r9, z+FBO_APPSIZE       ;application length in 128 byte pages
                             tst     r9                      ;test zero length
                             breq    SelectGame_down_jmp     ;nothing to burn, simulate DOWN press
-                            
+
                             ;size > 0, flash application
 SelectGame_burn:
                             cli                                     ;no ints wanted
@@ -2872,7 +3088,7 @@ SelectGame_burn:
                             ldd     r29, z+FBO_APPPAGE_MSB
                             ldi     r18, lo8(APPLICATION_START_ADDR)
                             ldi     r19, hi8(APPLICATION_START_ADDR)
-                            
+
                             ;get progressbar step increment in 8.8 fixed point
 
                             ldi     r24, 0                  ;PROGRESSBAR_STEPS in 8.8 fixed point
@@ -2880,43 +3096,43 @@ SelectGame_burn:
                             ldi     r26, 0xFF               ;8.8 division result.
                             ldi     r27, 0xFF               ;start with  -1 to compensate for next addition
 progress_div:
-                            adiw    r26, 1                  
+                            adiw    r26, 1
                             sub     r24, r9                 ;- application size
-                            sbci    r25, 0  
-                            brcc    progress_div            
+                            sbci    r25, 0
+                            brcc    progress_div
                             movw    r4, r26                 ;progress step increment = steps / application size  in 8.8 fixed point
-                            
+
                             sbci    r27, lo8(-(PROGRESSBAR_START))  ;add lsb display addr to progressbar position
                             movw    r16, r26                        ;progressbar position in 8.8 format
-FlashApp_loop:          
+FlashApp_loop:
                             sbrc    r18, 7                          ;test even 128 byte page
                             rjmp    FlashApp_load
-                            
+
                             ;even page, draw progress bar and select flash address
 
                             ;draw progress bar
-                            
+
                             ldi     r30, lo8(PROGRESSBAR_POS)
                             ldi     r31, hi8(PROGRESSBAR_POS)
                             st      z+, r1                      ;black outer line
                             ldi     r24,0x7E                    ;white inner line
-                            st      z+, r24                 
+                            st      z+, r24
                             ldi     r25,0x42                    ;top and botom pixels, empty progress bar
-progressbar_loop:                      
+progressbar_loop:
                             cp      r30, r17                    ;progress display position lsb
                             st      z+, r25
-                            ldi     r25,0x5A                    ;fill progress bar 
+                            ldi     r25,0x5A                    ;fill progress bar
                             brcs    progressbar_fill
                             ldi     r25,0x42                    ;progress bar empty
-progressbar_fill:                          
+progressbar_fill:
                             cpi     r30, lo8(PROGRESSBAR_END)   ;end of progress bar
                             brne    progressbar_loop
                             st      z+, r24                     ;white inner line
                             st      z, r1                       ;black outer line
                             rcall   SPI_flash_deselect_display
-                            
+
                             ;select flash cart address
-                            
+
                             movw    r30, r28                    ;get cart flash page
                             adiw    r28, 1                      ;post inc flash cart page
                             rcall   SPI_flash_read_addr
@@ -2983,7 +3199,7 @@ SelectGame_down:            ;select next game in list
 ;-------------------------------------------------------------------------------
 SelectList:
                             ;r9 = buttons
-                            
+
                             ldi     r25, -1
                             sbrc    r9, LEFT_BUTTON
                             rjmp    SelectList_prev
@@ -2993,7 +3209,7 @@ SelectList_ret:             ret                         ;return no left or right
                             ;next list
 SelectList_next:
                             ldi     r25, 1
-SelectList_prev:            
+SelectList_prev:
                             bst     r25, 7              ;save direction in T flag
                             add     r8, r25             ;get new list
 SelectGame_first:
@@ -3044,7 +3260,7 @@ SelectList_eof:            ;list not found, set nearest
 
                             movw    r6, r16             ;select nearest list
                             mov     r8, r18
-                            
+
                             ;rjmp   LoadApplicationInfo
 ;-------------------------------------------------------------------------------
 LoadApplicationInfo:
@@ -3091,36 +3307,45 @@ LoadAppInfo_Page:
                             brne    LoadAppInfo_Page
 
                             ;scroll titlescreen onto display
-                            
+
                             ldi     r29, 16             ;frames to scroll up/down
-                            ;sbrc    r9, LEFT_BUTTON
-                            ;rjmp    scroll_right
+                           #if defined (ARDUBOYMINI)
+                            sbrc    r9, LEFT_BUTTON
+                            rjmp    scroll_right
+                           #else
                             sbrc    r9, UP_BUTTON
                             rjmp    scroll_down
+                           #endif
                             sbrc    r9, DOWN_BUTTON
                             rjmp    scroll_up
+                           #if defined (ARDUBOYMINI)
+                            sbrc    r9, RIGHT_BUTTON
+                            rjmp    scroll_left
+                            rjmp    scroll_down         ;default: scroll down
+                           #else
                             sbrs    r9, RIGHT_BUTTON
                             rjmp    scroll_right        ;default: scroll left to right
+                           #endif
 
                             ;scroll left
-                            
+scroll_left:
                             ldi     r28, lo8(ScrollBuffer)
                             ldi     r29, hi8(ScrollBuffer)
-scroll_left_frame:  
+scroll_left_frame:
                             ldi     r30, lo8(DisplayBuffer)
                             ldi     r31, hi8(DisplayBuffer)
-                            
+
                             ldi     r25, HEIGHT / 8
-scroll_left_b1:  
+scroll_left_b1:
                             ldi     r24, WIDTH - HSCROLL_STEP
                             add     r24, r30
-scroll_left_b2:          
+scroll_left_b2:
                             ldd     r0, z + HSCROLL_STEP
                             st      z+, r0
                             cp      r30, r24
                             brne    scroll_left_b2
                             sbci    r24, -HSCROLL_STEP
-scroll_left_b3:      
+scroll_left_b3:
                             ld      r0, y+
                             st      z+, r0
                             cp      r30, r24
@@ -3129,43 +3354,43 @@ scroll_left_b3:
                             sbci    r29, hi8(-(WIDTH - HSCROLL_STEP))
                             dec     r25
                             brne    scroll_left_b1
-                            
+
                             rcall   SPI_flash_deselect_display_wait
                             subi    r28, lo8(WIDTH * HEIGHT /8 - HSCROLL_STEP)
                             sbci    r29, hi8(WIDTH * HEIGHT /8 - HSCROLL_STEP)
                             cpi     r28, lo8(ScrollBuffer + WIDTH)
                             brne    scroll_left_frame
                             rjmp    LoadAppInfo_end
-                            
+
                             ;scroll right
-scroll_right:                            
+scroll_right:
                             ldi     r28, lo8(ScrollBuffer + WIDTH * HEIGHT / 8)
                             ldi     r29, hi8(ScrollBuffer + WIDTH * HEIGHT / 8)
-scroll_right_frame:  
+scroll_right_frame:
                             ldi     r30, lo8(DisplayBuffer + WIDTH * HEIGHT / 8 - HSCROLL_STEP)
                             ldi     r31, hi8(DisplayBuffer + WIDTH * HEIGHT / 8 - HSCROLL_STEP)
                             ldi     r25, HEIGHT / 8
 scroll_right_b1:
                             mov     r24, r30
                             subi    r24, WIDTH - HSCROLL_STEP
-scroll_right_b2:          
-                            ld      r0, -z                
+scroll_right_b2:
+                            ld      r0, -z
                             std     z + HSCROLL_STEP, r0
                             cp      r30, r24
                             brne    scroll_right_b2
                             adiw    r30, HSCROLL_STEP
-scroll_right_b3:      
+scroll_right_b3:
                             ld      r0, -y
                             st      -z, r0
                             cp      r30, r24
                             brne    scroll_right_b3
-                            
+
                             sbiw    r30, HSCROLL_STEP
                             subi    r28, lo8(WIDTH - HSCROLL_STEP)
                             sbci    r29, hi8(WIDTH - HSCROLL_STEP)
                             dec     r25
                             brne    scroll_right_b1
-                            
+
                             rcall   SPI_flash_deselect_display_wait
                             subi    r28, lo8(-(WIDTH * HEIGHT / 8 - HSCROLL_STEP )) ;Y += WIDTH * HEIGHT /8 - HSCROLL_STEP
                             sbci    r29, hi8(-(WIDTH * HEIGHT / 8 - HSCROLL_STEP ))
@@ -3174,7 +3399,7 @@ scroll_right_b3:
                             rjmp    LoadAppInfo_end
 
                             ;scroll up 4 pixels
-scroll_up:    
+scroll_up:
 scroll_up_frame:
                             ldi     r26, lo8(DisplayBuffer + WIDTH)
                             ldi     r27, hi8(DisplayBuffer + WIDTH)
@@ -3182,7 +3407,7 @@ scroll_up_frame:
                             ldi     r31, hi8(DisplayBuffer)
                             ldi     r25, hi8(DisplayBuffer + WIDTH * HEIGHT / 8)
                             ldi     r28, hi8(ScrollBuffer + WIDTH * HEIGHT / 8)
-scroll_up_b1:  
+scroll_up_b1:
                             ld      r0, x+
                             ld      r24, z              ;high nibble / bottom 4 pixels upper row
                             eor     r24, r0             ;xor low nibble / top 4 pixels lower row
@@ -3193,30 +3418,30 @@ scroll_up_b1:
                             cpi     r26, lo8(DisplayBuffer + WIDTH * HEIGHT / 8)
                             cpc     r27, r25
                             brne    scroll_up_b2        ;not dealing with bottom page
-                            
+
                             ;bottom page needs data from scroll buffer
-                            
+
                             ldi     r27, hi8(ScrollBuffer) ;set only msb, lsb is same
-scroll_up_b2:    
+scroll_up_b2:
                             cpi     r30, lo8(DisplayBuffer + WIDTH * HEIGHT / 8)
                             cpc     r31, r25
                             brne    scroll_up_b3        ;not and end of display buffer
-    
+
                             ;display buffer done, scroll scroll buffer also
-                            
+
                             ldi     r31, hi8(ScrollBuffer)  ;set only msb, lsb is same
-scroll_up_b3:    
+scroll_up_b3:
                             cpi     r30, lo8(ScrollBuffer + WIDTH * HEIGHT / 8)
-                            cpc     r31, r28            
+                            cpc     r31, r28
                             brne    scroll_up_b1        ;loop until both buffers scrolled
-    
+
                             rcall   SPI_flash_deselect_display_wait
                             dec     r29
                             brne    scroll_up_frame     ;loop to scroll next frame
                             rjmp    LoadAppInfo_end
-                            
+
                             ;scroll down
-scroll_down:                            
+scroll_down:
 scroll_down_frame:
                             ldi     r26, lo8(DisplayBuffer + WIDTH * HEIGHT /8 - WIDTH)
                             ldi     r27, hi8(DisplayBuffer + WIDTH * HEIGHT /8 - WIDTH)
@@ -3232,16 +3457,83 @@ scroll_down_b1:
                             swap    r24                 ;swap into display order
                             st      z, r24
                             cpi     r30, lo8(ScrollBuffer)
-                            cpc     r31, r25      
+                            cpc     r31, r25
                             brne    scroll_down_b1
-                            
+
                             rcall   SPI_flash_deselect_display_wait
                             dec     r29
                             brne    scroll_down_frame   ;loop to scroll next frame
-LoadAppInfo_end:                            
+LoadAppInfo_end:
                             clr     r24                 ;Z flag set , R24 = 0 signal app info loaded
+
                             ret
-                            
+
+;-------------------------------------------------------------------------------
+
+                          #if defined (SUPPORT_POWERDOWN)
+powerdown:
+                            ldi     r24, (1 << ACD)             ;Disable Analog Comparator power
+                            out     ACSR, r24
+                            ldi     r24, (1 << PRTWI) | (1 << PRTIM0) | (1 << PRTIM1) | (1 << PRSPI) | (1 << PRADC) ;enable all power reductionss
+                            sts     (PRR0),r24
+                            ldi     r24, (1 << PRUSB) | (1 << PRTIM4)| (1 << PRTIM3) | (1 << PRUSART1)
+                            sts     (PRR1), r24
+                            ldi     r24, (1 << SM1) | (1 << SE) ;power down mode, enable sleep mode
+                            out     SMCR, r24
+                            sleep
+                          #endif
+
+;-------------------------------------------------------------------------------
+;i2c subs
+                        #if defined (DS3231) || defined (RV3028)
+i2c_enable_start:
+                            ldi     r30, TWBR   ;Use Z as I2C base register
+                            ldi     r31, 0
+                            ldd     r24, Z+1    ;get TWSR
+                            andi    r24, 0xFC   ;I2C prescaler to 1
+                            std     Z+1, r24    ;set TWSR
+                            ldi     r24, 12     ;400KHz bitrate
+                            st      Z, r24      ;set TWBR
+                            ;rjmp   i2c_start
+
+                        ;i2c_start
+
+;(Note Z must point to TWBR when any of the subs below are called)
+
+i2c_start:
+                            ldi     r24, (1 << TWINT) | (1 << TWSTA) | (1 << TWEN)
+                            rjmp    i2c_cmd
+i2c_write:
+                            std     z+3, r24    ;TWDR = r24
+                            ;rjmp   i2c_nack
+i2c_nack:
+                            ldi     r24, (1 << TWINT) | (1 << TWEN)
+                            ;rjmp   i2c_cmd
+i2c_cmd:
+                            std     z+4, r24    ;TWCR = r24
+                            ;rjmp   i2c_wait
+i2c_wait:
+                            ldi     r23, 2      ;1..2 frames timeout
+                            add     r23, r2     ;add frame counter
+i2c_wait_loop:
+                            ldd     r24, z+4    ;TWCR
+                            sbrc    r24, TWINT  ;skip if still busy
+                            ret
+                            cpse    r23, r2     ;skip and return if timeout
+                            rjmp    i2c_wait_loop
+                            ret
+i2c_stop:
+                            rcall   i2c_2us_delay   ;stop setup time
+                            ldi     r24, (1 << TWINT) | (1 << TWSTO) | (1 << TWEN)
+                            std     Z+4, r24        ;TWCR
+                            ;rjmp   i2c_delay       ;setup time for next start or disable
+i2c_2us_delay:
+                            ldi     r24, 8     ;~2 usec delay (including call + ret)
+                            dec     r24
+                            brne    .-4
+                            ret
+
+                           #endif
 ;-------------------------------------------------------------------------------
 ;PROGMEM data
 ;-------------------------------------------------------------------------------
@@ -3256,10 +3548,10 @@ DisplaySetupData:
                         #if defined(OLED_SSD132X_96X96) || (OLED_SSD132X_128X96) || (OLED_SSD132X_128X128)
                           #if defined(OLED_SSD132X_96X96)
                             .byte   0x15, 0x10, 0x3f        ;Set column start and end address  skipping left most 32 pixels
-                          #else        
+                          #else
                             .byte   0x15, 0x00, 0x3f        ;Set column start and end address full width
                           #endif
-                          #if defined (OLED_SSD132X_96X96) 
+                          #if defined (OLED_SSD132X_96X96)
                             .byte   0x75, 0x30, 0x6f        ;Set row start and end address
                           #elif defined (OLED_SSD132X_128X96)
                             .byte   0x75, 0x10, 0x4f
@@ -3293,10 +3585,12 @@ DisplaySetupData:
 DisplaySetupData_End:
                             ;USB boot icon graphics
 
+                           #if !(defined (DS3231) || defined (RV3028))
 bootgfx:                    .byte   0x00, 0x00, 0xff, 0xff, 0xcf, 0xcf, 0xff, 0xff, 0xff, 0xff, 0xcf, 0xcf, 0xff, 0xff, 0x00, 0x00
                             .byte   0xfe, 0x06, 0x7e, 0x7e, 0x06, 0xfe, 0x46, 0x56, 0x56, 0x16, 0xfe, 0x06, 0x56, 0x46, 0x1e, 0xfe
                             .byte   0x3f, 0x61, 0xe9, 0xe3, 0xff, 0xe3, 0xeb, 0xe3, 0xff, 0xe3, 0xeb, 0xe3, 0xff, 0xe1, 0x6b, 0x3f
 bootgfx_end:
+                           #endif
 ;-------------------------------------------------------------------------------
                             .section .bss   ;zero initialized data
 ;-------------------------------------------------------------------------------
@@ -3335,7 +3629,7 @@ FlashBuffer:                        .space  256
                                     .equ    FBO_NEXTSLOT,       10  ;u16 page address to next slot
                                     .equ    FBO_NEXTSLOT_MSB,   10
                                     .equ    FBO_NEXTSLOT_LSB,   11
-                                    .equ    FBO_SLOTSIZE,       12  ;u16 slot size in 256 byte pages 
+                                    .equ    FBO_SLOTSIZE,       12  ;u16 slot size in 256 byte pages
                                     .equ    FBO_SLOTSIZE_MSB,   12
                                     .equ    FBO_SLOTSIZE_LSB,   13
                                     .equ    FBO_APPSIZE,        14  ;u8 application size in 128 byte PROGMEM pages or 0 titlescreen
@@ -3345,13 +3639,38 @@ FlashBuffer:                        .space  256
 ScrollBuffer:                       .space  1024                    ;1K display buffer used for scrolling
 DisplayBuffer:                      .space  1024                    ;1K display buffer copied to dispay
 
+                                  #if defined (DS3231) || defined(RV3028)
+
+                                    .equ    LargeDigits,        FlashBuffer + 32        ;Arduboy GT Large digits gfx
+                                    .equ    SmallDigits,        LargeDigits + 11 * 14   ;Arduboy GT small digits +space gfx
+                                    .equ    AmPmIcon,           SmallDigits + 10 * 5    ;Arduboy GT am/pml icon gfx
+
+                                    .equ    DateTime,   ScrollBuffer
+                                    .equ    DateTimeSize, SLD_LEN
+                                    .equ    DateTimeLast, DateTime + DateTimeSize - 1
+                                    .equ    IDX_SEC,    0x00
+                                    .equ    IDX_MIN,    0x01
+                                    .equ    IDX_HOUR,   0x02    ;hour | 12/24 mode | am/pm
+                                    .equ    IDX_DAY,    0x03    ;Day of the Week
+                                    .equ    IDX_DATE,   0x04    ;Day of the Month
+                                    .equ    IDX_MONTH,  0x05
+
+                                    #if defined(DS3231)
+                                    .equ    IDX_HOURMODE,  0x02 ;hour register contains 12/24 mode flag
+                                    .equ    MSK_HOURMODE,  0x40 ;bit 6 is 12/24 mode flag
+                                    #elif defined(RV3028)
+                                    .equ    IDX_HOURMODE,  0x10 ;control 2 register contains 12/24 mode flag
+                                    .equ    MSK_HOURMODE,  0x02 ;bit 1 is 12/24 mode flag
+                                    #endif
+
+                                   #endif
 SECTION_BSS_END:
 ;-------------------------------------------------------------------------------
                             .section .bootsignature, "ax"
 ;-------------------------------------------------------------------------------
 
                             .byte   BOOTLOADER_VERSION_MAJOR, BOOTLOADER_VERSION_MINOR
-                            
+
                             rjmp    FlashPage
 
                             .word   BOOT_SIGNATURE
