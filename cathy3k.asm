@@ -48,7 +48,7 @@
 ;
 ;  - add Arduboy mini support
 ;
-;  - add DS3231 RTC support
+;  - add DS3231 / RV 3028 RTC support
 ;
 ;  the following obselete commands where removed:
 ;
@@ -128,18 +128,22 @@
 ; #define CART_CS_SDA       //;When using PORTD1/SDA for flash chip select
 ;                           //;instead of PORTD2/RX
 
+;#define SUPPORT_POWERDOWN  //;Pressing reset on loader screen will power down the MCU
+
+;#define RUN_APP_ON_POWERON //;Start last flashed game instead of entering bootloader mode
+
+;I2C Real time clocks:
+
+; #define DS3231            //; use Dallas-Maxim DS3231 Real Time Clock
+
+; #define RV3028            //; use Micro Crystal RV-3028-C7 Real Time Clock
+
 ;the DEVICE_VID and DEVICE_PID will determine for which board the build will be
 ;made. (Arduino Leonardo, Arduino Micro, Arduino Esplora, SparkFun ProMicro)
 
 ;USB device and vendor IDs
 ; #define DEVICE_VID                0x2341  //; Arduino LLC
 ; #define DEVICE_PID                0x0036  //; Leonardo Bootloader
-
-;I2C Real time clocks
-
-; #define DS3231
-
-; #define RV3028
 
 ;===============================================================================
 ;boot magic
@@ -181,7 +185,7 @@
 #if defined (DS3231)
  #define SLA_W                  (0x68) << 1 | 0
  #define SLA_R                  (0x68) << 1 | 1
- #define SLD_LEN                6
+ #define SLD_LEN                7
 #elif defined (RV3028)
  #define SLA_W                  (0xA4)
  #define SLA_R                  (0xA5)
@@ -1222,8 +1226,15 @@ reset_b2:
                             rjmp    powerdown
                            #endif
 
-                            ;test power on reset
 reset_por:
+                            ;pull display out of reset
+                            
+                           #if !(defined (ARDUBOY_PROMICRO) && defined (CART_CS_SDA))
+                            sbi     PORTD, OLED_RST             ;pull display out of reset
+                           #endif
+                           
+                            ;test power on reset
+
                            #ifdef  RUN_APP_ON_POWERON
                             sbrc    r16, PORF                   ;MCUSR state test power on reset. only do button test on POR
                            #else
@@ -1313,15 +1324,16 @@ bootloader_loop:
 
                            #if defined (DS3231) || defined (RV3028)
 
-                            ;show time on every 15th frame while on loader screen
+                            ;show time on every 16th frame while on loader screen
 
                             ldi     r24, 0x0F                   ;every 16 frames mask
                             and     r24, r2                     ;frame counter
                             or      r24, r8                     ;selected list
                             brne    bootloader_next             ;skip if not at 16th frame and not on loader screen
 
+                            lds     r24,(FlashBuffer + FBO_APPPAGE_MSB) ;get show date time flag
+                            sbrs    r24, 7                              ;do not show if bit is set
                             rcall   DrawDateTime
-                            rcall   Display
 
                            #endif
 bootloader_next:
@@ -1360,7 +1372,22 @@ StartSketch:
 
                            #if defined (DS3231) || defined (RV3028)
 DrawDateTime:
-                            ;start with reading date and time from RTC
+                            ;load graphics data from external flash
+                            
+                            ldi     r30, 1 + 4              ;skip header + title screen
+                            ldi     r31, 0                  ;to point to 1K RTC data
+                            rcall   SPI_flash_read_addr     ;select flash address
+                            
+                            ldi     r26, lo8(ScrollBuffer)
+                            ldi     r27, hi8(ScrollBuffer)
+                            ldi     r28, 8                  ;read 1K data
+load_gfx_loop:                            
+                            rcall   SPI_read_page
+                            dec     r28
+                            brne    load_gfx_loop
+                            ;rcall   SPI_flash_deselect     ;not needed
+
+                            ;read date and time from RTC
 
                             rcall   i2c_enable_start
                             ldi     r24, SLA_W          ;write slave address for write
@@ -1372,132 +1399,130 @@ DrawDateTime:
                             ldi     r24, SLA_R          ;write slave address for read
                             rcall   i2c_write
 
-                            ldi     r28, lo8(DateTime)
-                            ldi     r29, hi8(DateTime)
+                            ldi     r28, lo8(DateTime)  ;Y = DateTime
+                            ldi     r29, hi8(DateTime)  
+                            movw    r26, r28            ;X = DateTime
 read_rtc_loop:
                             ldi     r24, (1 << TWINT) | (1 << TWEA) | (1 << TWEN)   ;read ack
                             rcall   i2c_cmd
                             ldd     r24, Z+3            ;Y++ = TWDR
-                            st      Y+, r24
-                            cpi     r28, lo8(DateTimeLast)
+                            st      X+, r24
+                            cpi     r26, lo8(DateTimeLast)
                             brne    read_rtc_loop       ;not last, read another byte using readAck
                             rcall   i2c_nack            ;read Nack 6th last byte
                             ldd     r24, Z+3            ; Y = TWDR
-                            st      Y+, r24
+                            st      X+, r24
                             rcall   i2c_stop
                             std     Z+4, r1             ;TWCR = disable
 
-                            ;now draw the date and time
+                            ;draw the date
 
-                            sbiw    r28, DateTimeSize   ;point back to start of DateTime struct
-                            ldi     r26,lo8(DATE_POS)
-                            ldi     r27,hi8(DATE_POS)
+                            ldi     r26, lo8(DigitDataTable)
+                            ldi     r27, hi8(DigitDataTable)
+
                             ldd     r24, Y + IDX_MONTH
-                            rcall   DrawLargeDoubleDigit
-                            adiw    r26, DATE_SEP
+                            rcall   drawDoubleDigit
                             ldd     r24, Y + IDX_DATE
-                            rcall   DrawLargeDoubleDigit
-                            ldi     r26,lo8(TIME_POS)
-                            ldi     r27,hi8(TIME_POS)
+                            rcall   drawDoubleDigit
+                            ldd     r24, Y + IDX_YEAR
+                            rcall   drawDoubleDigit
 
-                            ;test 12/24 hour mode
-
+                            ;draw the time
+                            
                             ldd     r25, Y + IDX_HOURMODE   ;get 12/24 hour mode
                             andi    r25, MSK_HOURMODE
                             ldd     r24, Y + IDX_HOUR
-                            breq    Draw_hours              ;skip no changes for 24 hour mode
-
-                            ;for 12-hour mode use leading space for hours < 10
+                            breq    DrawDateTime_hours      ;skip no changes for 24 hour mode
+                            
+                            ;for 12-hour mode replace leading zero with space (digit 11)
 
                             andi    r24, 0x1F               ;keep hours only
                             sbrs    r24, 4                  ;skip if not leading zero
                             subi    r24, -0xA0              ;else use 11th digit leading space
-Draw_hours:
-                            rcall   DrawLargeDoubleDigit
-                            adiw    r26, TIME_SEP
+DrawDateTime_hours:
+                            rcall   drawDoubleDigit
                             ldd     r24, Y + IDX_MIN
-                            rcall   DrawLargeDoubleDigit
+                            rcall   drawDoubleDigit
+                            
+                            ;draw seconds
 
-                            ;test 12/24-hour mode again
-
+                            ldd     r24, Y + IDX_SEC
+                            rcall   drawDoubleDigit
+                            
+                            ;test 12/24-hour mode
+                            
                             tst     r25
-                            breq    DrawSeconds             ;skip 24-hour mode
+                            breq    DrawDateTime_display    ;skip 24-hour mode
 
                             ;draw am/pm icon
 
                             ldd     r24, Y + IDX_HOUR
                             lsr     r24                     ;am/pm flag to bit 4
                             andi    r24, 0x10               ;get am/pm index
-                            ldi     r30,lo8(AmPmIcon)       ;am/pm graphics pointer
-                            ldi     r31,hi8(AmPmIcon)
-                            ldi     r20,10                  ;width
-                            rcall   DrawAmPmIcon
-
-                            ;draw seconds
-DrawSeconds:
-                            ldi     r26,lo8(SEC_POS)
-                            ldi     r27,hi8(SEC_POS)
-                            ldd     r24, Y + IDX_SEC
-                            ;rjmp    DrawSmallDoubleDigit
-
-DrawSmallDoubleDigit:
-                            rcall   DrawSmallDigit
-
-DrawSmallDigit:
-                            ldi     r30,lo8(SmallDigits)    ;large digits graphics pointer
-                            ldi     r31,hi8(SmallDigits)
-                            ldi     r20,5                   ;width
-DrawAmPmIcon:
-                            ldi     r21,1                   ;height
-                            rjmp    DrawDigit
-
-DrawLargeDoubleDigit:
-                            rcall   DrawLargeDigit
-
-DrawLargeDigit:
-                            ldi     r30, lo8(LargeDigits)    ;seconds digits graphics pointer
-                            ldi     r31, hi8(LargeDigits)
-                            ldi     r20,7                   ;width
-                            ldi     r21,2                   ;height
+                            rcall   DrawDigit
+DrawDateTime_display:                            
+                            rjmp    SPI_flash_deselect_display
+                            
+;----------------------------------------------------
+drawDoubleDigit:
+                            rcall   DrawDigit
+                            ;rjmp   DrawDigit
+                            
+;----------------------------------------------------
+DrawDigit:
 
 ;draws most significant nibble as digit
 
-DrawDigit:
-
 ;entry:
-;   r24     = bcd value
-;   r20     = width in columns
-;   r21     = height in rows
-;   r26,r27 = display
-;   r30,r31 = gfx
+;   r24      = bcd value
+;   r26, r27 = digit data table
 ;exit:
-;   r24     = bcd value with swapped nibbles
-;   r26,r27 = display address of next column
-
+;   r24      = bcd value with swapped nibbles
+;   r26, r27 = digit data table + 4
 ;uses:
-;   r0, r20, r22, r23, r30, r31
+;   r0, r16, r17, r18, r19, r20, r21, r22, r23, r30, r31
 
-                            mul     r21, r20        ;size = rows*columns
-                            swap    r24             ;swap high and low digits
-                            mov     r22, r24        ;keep lower digit only
-                            andi    r22, 0x0F
-                            mul     r22, r0         ;offset = digit * size
-                            add     r30, r0         ;add offset to digit gfx pointer
-                            adc     r31, r1
-DrawDigit_col:
-                            movw    r22, r26        ;save displayBuffer position
-                            mov     r1, r21         ;get row
-DrawDigit_row:
-                            ld      r0, z+          ;gfx to display buffer
-                            st      x, r0
-                            subi    r26, lo8(-WIDTH);display buffer += WIDTH
-                            sbci    r27, hi8(-WIDTH)
-                            dec     r1
-                            brne    DrawDigit_row
-                            movw    r26, r22        ;restore displayBuffer position
-                            adiw    r26, 1          ;displayBuffer++
-                            dec     r20
-                            brne    DrawDigit_col   ;loop next column
+                            movw    r18, r28                ;save time struct pointer
+                            ld      r29, X+                 ;get display offset
+                            ld      r28, X+                 
+                            subi    r28, lo8(-(DisplayBuffer))  ;X = display address
+                            sbci    r29, hi8(-(DisplayBuffer)) 
+                            ld      r31, X+                     ; get graphics offset
+                            ld      r30, X+                
+                            subi    r30, lo8(-(FlashBuffer))    ;Z =  graphics addresss
+                            sbci    r31, hi8(-(FlashBuffer)) 
+                            ld      r20, Z+                 ;get columns
+                            ld      r21, Z+                 ;get rows
+                            
+                            mul     r21, r20                ;size = rows*columns
+                            swap    r24                     ;swap high and low digits
+                            mov     r22, r24                ;keep lower digit only
+                            andi    r22, 0x0F       
+                            mul     r22, r0                 ;offset = digit * size
+                            add     r30, r0                 ;add offset to digit gfx pointer
+                            adc     r31, r1     
+DrawDigit_col:      
+                            movw    r22, r28                ;save displayBuffer position
+                            mov     r1, r21                 ;get row
+DrawDigit_row:      
+                            movw    r16, r28                ;test if displayBuffer pointer is in range
+                            subi    r16, lo8(DisplayBuffer)
+                            sbci    r17, hi8(DisplayBuffer)                
+                            cpi     r17, hi8(WIDTH * HEIGHT / 8)
+                            brcc    DrawDigit_ret           ;return display buffer out of range
+
+                            ld      r0, z+                  ;gfx to display buffer
+                            st      y, r0       
+                            subi    r28, lo8(-WIDTH)        ;display buffer += WIDTH
+                            sbci    r29, hi8(-WIDTH)        
+                            dec     r1      
+                            brne    DrawDigit_row       
+                            movw    r28, r22                ;restore displayBuffer position
+                            adiw    r28, 1                  ;displayBuffer++
+                            dec     r20     
+                            brne    DrawDigit_col           ;loop next column
+DrawDigit_ret:                            
+                            movw    r28, r18                ;restore time struct pointer
                             ret
 
                            #endif
@@ -2805,31 +2830,31 @@ TestApplicationFlash:
                             ret
 ;-------------------------------------------------------------------------------
 SetupHardware_bootloader:
-                            ;pull display out of reset and activate flash CART CS
-
-                        #if defined (ARDUBOY_PROMICRO)
-                          #ifdef CART_CS_SDA
-                            ldi     r24,  (1 << TX_LED) | (1 << RGB_G) ;Command mode, Tx LED off, RGB green off, Flash cart active
-                            out     PORTD, r24
-                          #else
-                           #if defined (MICROCADE)
-                            ldi     r24, (1 << OLED_RST) | (1 << TX_LED) | (0 << RGB_G)  | (1 << OLED_CS) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, RGB green on, Flash cart active
-                           #else
-                            ldi     r24, (1 << OLED_RST) | (1 << TX_LED) | (1 << RGB_G)  | (1 << OLED_CS) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, RGB green off, Flash cart active
-                           #endif
-                            out     PORTD, r24
-                          #endif
-                        #elif defined (ARDUBIGBOY) || (ARDUBOYMINI)
-                            cbi     PORTE, CART_CS      ;enable SPI flash cart
-                            sbi     PORTD, OLED_RST     ;RST inactive
-                        #else
-                           #if defined (DS3231) || defined (RV3028)
-                            ldi     r24, (1 << OLED_RST) | (1 << TX_LED)  | (1 << OLED_CS) | (1<< CART_CS) | (1 << I2C_SDA) | (1 << I2C_SCL) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, Flash cart inactive, I2C inactive
-                           #else
-                            ldi     r24, (1 << OLED_RST) | (1 << TX_LED)  | (1 << OLED_CS) | (1<< CART_CS) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, Flash cart inactive
-                           #endif
-                            out     PORTD, r24
-                        #endif
+                       ;    ;pull display out of reset and activate flash CART CS
+                       ;
+                       ;#if defined (ARDUBOY_PROMICRO)
+                       ;  #ifdef CART_CS_SDA
+                       ;    ldi     r24,  (1 << TX_LED) | (1 << RGB_G) ;Command mode, Tx LED off, RGB green off, Flash cart active
+                       ;    out     PORTD, r24
+                       ;  #else
+                       ;   #if defined (MICROCADE)
+                       ;    ldi     r24, (1 << OLED_RST) | (1 << TX_LED) | (0 << RGB_G)  | (1 << OLED_CS) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, RGB green on, Flash cart active
+                       ;   #else
+                       ;    ldi     r24, (1 << OLED_RST) | (1 << TX_LED) | (1 << RGB_G)  | (1 << OLED_CS) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, RGB green off, Flash cart active
+                       ;   #endif
+                       ;    out     PORTD, r24
+                       ;  #endif
+                       ;#elif defined (ARDUBIGBOY) || (ARDUBOYMINI)
+                       ;    cbi     PORTE, CART_CS      ;enable SPI flash cart
+                       ;    sbi     PORTD, OLED_RST     ;RST inactive
+                       ;#else
+                       ;   #if defined (DS3231) || defined (RV3028)
+                       ;    ldi     r24, (1 << OLED_RST) | (1 << TX_LED)  | (1 << OLED_CS) | (1<< CART_CS) | (1 << I2C_SDA) | (1 << I2C_SCL) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, Flash cart inactive, I2C inactive
+                       ;   #else
+                       ;    ldi     r24, (1 << OLED_RST) | (1 << TX_LED)  | (1 << OLED_CS) | (1<< CART_CS) ;RST inactive, OLED CS inactive, Command mode, Tx LED off, Flash cart inactive
+                       ;   #endif
+                       ;    out     PORTD, r24
+                       ;#endif
 
                             ;release SPI flash from power down
 
@@ -3494,11 +3519,14 @@ i2c_enable_start:
                             std     Z+1, r24    ;set TWSR
                             ldi     r24, 12     ;400KHz bitrate
                             st      Z, r24      ;set TWBR
+                            ldi     r23, 4      ;3..4 frames timeout
+                            add     r23, r2     ;add frame counter
+                            
                             ;rjmp   i2c_start
 
                         ;i2c_start
 
-;(Note Z must point to TWBR when any of the subs below are called)
+;(Note Z must point to TWBR when any of the subs below are called, r23 holds timeout value)
 
 i2c_start:
                             ldi     r24, (1 << TWINT) | (1 << TWSTA) | (1 << TWEN)
@@ -3512,9 +3540,9 @@ i2c_nack:
 i2c_cmd:
                             std     z+4, r24    ;TWCR = r24
                             ;rjmp   i2c_wait
-i2c_wait:
-                            ldi     r23, 2      ;1..2 frames timeout
-                            add     r23, r2     ;add frame counter
+;i2c_wait:
+;                            ldi     r23, 2      ;1..2 frames timeout
+;                            add     r23, r2     ;add frame counter
 i2c_wait_loop:
                             ldd     r24, z+4    ;TWCR
                             sbrc    r24, TWINT  ;skip if still busy
@@ -3645,15 +3673,19 @@ DisplayBuffer:                      .space  1024                    ;1K display 
                                     .equ    SmallDigits,        LargeDigits + 11 * 14   ;Arduboy GT small digits +space gfx
                                     .equ    AmPmIcon,           SmallDigits + 10 * 5    ;Arduboy GT am/pml icon gfx
 
-                                    .equ    DateTime,   ScrollBuffer
+                                    .equ    DateTime,   FlashBuffer + 17
                                     .equ    DateTimeSize, SLD_LEN
                                     .equ    DateTimeLast, DateTime + DateTimeSize - 1
+                                    
+                                    .equ    DigitDataTable, DisplayBuffer - (13 * 2 * 2)
+                                    
                                     .equ    IDX_SEC,    0x00
                                     .equ    IDX_MIN,    0x01
-                                    .equ    IDX_HOUR,   0x02    ;hour | 12/24 mode | am/pm
+                                    .equ    IDX_HOUR,   0x02    ;hour | 12/24 mode(DS3231) | am/pm
                                     .equ    IDX_DAY,    0x03    ;Day of the Week
                                     .equ    IDX_DATE,   0x04    ;Day of the Month
                                     .equ    IDX_MONTH,  0x05
+                                    .equ    IDX_YEAR,   0x06
 
                                     #if defined(DS3231)
                                     .equ    IDX_HOURMODE,  0x02 ;hour register contains 12/24 mode flag
