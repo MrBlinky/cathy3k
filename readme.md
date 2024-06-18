@@ -45,8 +45,20 @@ need to flash the fuses BOOTSZ1 = 0 BOOTSZ0 = 1 (2K-byte/1K-word).
 Recommended fuse settings: LFUSE:0xFF EFUSE:0xCB HFUSE:0xD2
 
 ### building bootloader
-To (re)build the bootloaders. Install WinAVR-20100110 in standard location and 
-run the make3k-all.bat batch file
+To (re)build the bootloaders. Install WinAVR-20100110 in the standard location
+and  run the make3k-all.bat batch file.
+
+Alternatively the AVR GNU toolchain of the Arduino IDE or the stand alone 
+toolkit can be used. For this you will need to add the folder **[ArduinoFolder]\hardware\tools\avr\bin**
+to the system path (contains the avr-gcc.exe) and create a system vatiable
+**AVR32_HOME** that points to **[ArduinoFolder]\hardware\tools\avr** folder.
+If this is unwanted then the following lines can be added at the beginning of the .bat file:
+```
+PATH=%PATH%[ArduinoFolder]\hardware\tools\avr\bin;
+SET AVR32_HOME=[ArduinoFolder]\hardware\tools\avr
+```
+Note that all of the above instances of **[ArduinoFolder]** must be replaced by
+the  full path of the folder where the Arduino.exe is located.
 
 ### bootloader filenames
 The batch file creates many bootloaders for Arduboy and many homemade Arduboy 
